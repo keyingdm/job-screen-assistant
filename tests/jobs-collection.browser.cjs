@@ -1,0 +1,80 @@
+// All pages and records are fictional; permissions are pre-granted in this test copy.
+const {chromium}=require('playwright'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),http=require('node:http');
+const ROOT=path.resolve(__dirname,'..'),tempRoot=fs.realpathSync(os.tmpdir()),testRoot=fs.mkdtempSync(path.join(tempRoot,'job-generic-test-'));
+let context,server,passed=0;const pass=s=>{passed++;console.log('PASS '+s);};
+(async()=>{
+  const ext=path.join(testRoot,'extension');fs.cpSync(path.join(ROOT,'extension'),ext,{recursive:true});
+  require('./access-fixture.cjs')(ext);
+  const manifest=JSON.parse(fs.readFileSync(path.join(ext,'manifest.json'),'utf8'));manifest.host_permissions=['http://127.0.0.1/*'];fs.writeFileSync(path.join(ext,'manifest.json'),JSON.stringify(manifest));
+  const traffic=[];
+  server=http.createServer(async(req,res)=>{
+    let payload='';for await(const chunk of req)payload+=chunk;traffic.push({url:req.url,method:req.method,payload});
+    res.setHeader('Content-Type','text/html;charset=utf-8');const u=new URL(req.url,'http://127.0.0.1'),id=u.searchParams.get('id');
+    if(u.pathname==='/list'){
+      const form=new URLSearchParams(payload),p=Number(form.get('page')||0),city=form.get('city')||u.searchParams.get('city')||'武汉';
+      const items=(p===0?[1,2]:[3,4]).map(n=>'<li><h3><a href="/job/detail?id='+n+'">虚构岗位'+n+'</a></h3><p>学历要求：本科及以上</p><p>专业要求：专业不限</p><h5>示例单位A</h5><p>工作地点：'+city+'</p><p>截止日期：2099-12-31</p><button onclick="fetch(\'/apply-trap\')">申请</button></li>').join('');
+      res.end('<main><h1>虚构岗位列表</h1><form id="search" action="/list" method="post"><input name="city" value="'+city+'"><input id="page" name="page" type="hidden" value="'+p+'"></form><ul>'+items+'</ul><nav class="pagination"><span aria-current="page">'+(p+1)+'</span>'+(p===0?'<a href="javascript:void(0)" onclick="document.getElementById(\'page\').value=1;document.getElementById(\'search\').submit()">下一页</a>':'<button disabled>下一页</button>')+'</nav><p>共4条，共2页</p></main>');
+    }else if(u.pathname==='/job/detail'){
+      if(id==='3')res.end('<main><h1>虚构岗位3</h1><div id="loaded"></div><script>setTimeout(()=>document.getElementById("loaded").innerHTML="<h2>任职要求</h2><p>硕士及以上学历，专业不限。</p><h2>工作职责</h2><p>执行虚构测试。</p>",250)</script></main>');
+      else if(id==='4')res.end('<script type="application/ld+json">'+JSON.stringify({'@type':'JobPosting',title:'虚构岗位4',description:'职责存在，要求未提供。'})+'</script>');
+      else res.end('<main><h1>虚构岗位'+id+'</h1><p>公司名称：示例单位A</p><p>工作地点：武汉</p><h2>任职要求</h2><p>本科及以上学历，2027届，专业不限。</p><h2>工作职责</h2><p>执行虚构测试。</p></main>');
+    }else if(u.pathname==='/expand')res.end('<main><h1>虚构展开列表</h1><div class="listingItem"><div class="listingTitle"><span onclick="window.open(\'/open?id=inline\')">虚构展开岗位</span></div><p>示例单位B</p><p>武汉｜全职</p><button id="expand-button" onclick="document.getElementById(\'details\').innerHTML=\'<h3>任职要求</h3><p>本科及以上，专业不限。</p><h3>工作内容</h3><p>虚构职责。</p>\';this.textContent=\'关闭详情\'">查看详情</button><div id="details"></div></div><p>共1个职位</p></main>');
+    else if(u.pathname==='/slow')res.end('<main><h1>虚构慢速详情</h1><div id="late"></div><script>setTimeout(()=>document.getElementById("late").innerHTML="<h2>任职要求</h2><p>本科及以上</p>",2500)</script></main>');
+    else{res.statusCode=404;res.end('not found');}
+  });
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const base='http://127.0.0.1:'+server.address().port;
+  context=await chromium.launchPersistentContext(path.join(testRoot,'profile'),{executablePath:process.env.BROWSER_PATH||'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',headless:true,ignoreDefaultArgs:['--disable-extensions'],args:['--disable-extensions-except='+ext,'--load-extension='+ext]});
+  const worker=context.serviceWorkers()[0]||await context.waitForEvent('serviceworker');
+  const source=await context.newPage();await source.goto(base+'/list?city='+encodeURIComponent('武汉'));
+  const tabId=await worker.evaluate(async url=>(await chrome.tabs.query({})).find(t=>t.url===url).id,source.url());
+  const event=context.waitForEvent('page');await worker.evaluate(async id=>openDashboard(await chrome.tabs.get(id)),tabId);const page=await event;
+  page.setDefaultTimeout(60000);await page.waitForURL('**/jobs.html?tab=*');await page.locator('#source-label').filter({hasText:'127.0.0.1'}).waitFor();
+  pass('toolbar dispatcher binds an arbitrary current list');
+  await page.locator('#my-major').fill('只用于本地比较');await page.locator('#collect').click();
+  await page.locator('#coverage').filter({hasText:'已发现 2 /'}).waitFor();await page.locator('#pause').click();await page.locator('#status').filter({hasText:'已暂停'}).waitFor();
+  assert.equal(await page.locator('.job-row').count(),2);assert.equal((await page.evaluate(async()=>chrome.storage.local.get(null))).jobDataset,undefined);
+  pass('pause keeps temporary records in memory only');
+  await page.locator('#resume').click();await page.locator('#status').filter({hasText:'本次采集结束'}).waitFor();
+  assert.equal(await page.locator('.job-row').count(),4);
+  const post=traffic.filter(r=>r.method==='POST');assert.equal(post.length,1);assert.equal(new URLSearchParams(post[0].payload).get('city'),'武汉');
+  assert.ok(!JSON.stringify(traffic).includes('只用于本地比较'));assert.ok(!traffic.some(r=>r.url.startsWith('/apply-trap')));
+  pass('POST pagination preserves source filters and never clicks application buttons');
+  await page.getByRole('button',{name:'虚构岗位3',exact:true}).click();assert.match(await page.locator('#detail-body').textContent(),/硕士及以上/);await page.locator('#detail-close').click();
+  await page.getByRole('button',{name:'虚构岗位4',exact:true}).click();assert.match(await page.locator('#detail-body').textContent(),/要求不完整/);await page.locator('#detail-close').click();
+  assert.match(await page.locator('#coverage').textContent(),/要求完整 3.*不完整 1/);
+  pass('static details, rendered details and missing requirements remain distinct');
+  await page.getByRole('button',{name:'收藏 虚构岗位1',exact:true}).click();await page.waitForFunction(async()=>Object.keys((await chrome.storage.local.get('jobFavorites')).jobFavorites||{}).length===1);
+  const saved=await page.evaluate(async()=>Object.values((await chrome.storage.local.get('jobFavorites')).jobFavorites)[0]);
+  assert.equal(saved.job.url,base+'/job/detail?id=1');assert.match(saved.job.requirements,/2027/);
+  const download=page.waitForEvent('download');await page.locator('#export-csv').click();assert.match(fs.readFileSync(await(await download).path(),'utf8'),/虚构岗位4/);
+  pass('favorite snapshots retain the real source link while CSV covers all filtered rows');
+  await page.reload();await page.locator('.job-row').waitFor();assert.equal(await page.locator('.job-row').count(),1);await page.locator('#tab-session').click();assert.equal(await page.locator('.job-row').count(),0);
+  pass('reopening discards every non-favorite');
+  await source.goto(base+'/expand');await page.reload();await page.locator('#source-label').filter({hasText:'127.0.0.1'}).waitFor();await page.locator('#collect').click();
+  await page.locator('#status').filter({hasText:'本次采集结束'}).waitFor();assert.equal(await page.locator('.job-row').count(),1);
+  await page.getByRole('button',{name:'虚构展开岗位',exact:true}).click();assert.match(await page.locator('#detail-body').textContent(),/本科及以上/);
+  assert.equal(await page.locator('#detail-body a').getAttribute('href'),base+'/open?id=inline');await page.locator('#detail-close').click();
+  pass('generic expansion and popup link capture need no site-specific routes');
+  await page.locator('.recognition summary').click();
+  await page.locator('.pick[data-kind=title]').click();await source.locator('#job-screen-picker').waitFor();
+  await source.locator('.listingTitle span').click();await source.getByRole('button',{name:'使用选择',exact:true}).click();await page.locator('#status').filter({hasText:'已记住本页识别规则'}).waitFor();
+  const rules=await page.evaluate(async()=>(await chrome.storage.local.get('jobRules')).jobRules);assert.match(Object.values(rules)[0].title,/listingTitle/);
+  await page.locator('.pick[data-kind=next]').click();await source.locator('#job-screen-picker').waitFor();await source.getByRole('button',{name:'关闭',exact:true}).click();await page.locator('#status').filter({hasText:'已取消'}).waitFor();
+  pass('point-and-select rules stay local and the picker can close');
+  const denied=await page.evaluate(async url=>chrome.runtime.sendMessage({type:'job-screen',action:'load',tabId:Number(new URL(location.href).searchParams.get('tab')),nonce:new URL(location.href).searchParams.get('nonce'),url}),'https://example.invalid/job?id=1');
+  assert.equal(denied.ok,false);assert.match(denied.error,/当前网站/);
+  await source.goto('about:blank');await page.locator('#collect').click();await page.locator('#status').filter({hasText:'已切换网站'}).waitFor();
+  pass('unauthorized cross-site details and changed source origins are rejected');
+  await source.goto(base+'/expand');await page.reload();await page.locator('#source-label').filter({hasText:'127.0.0.1'}).waitFor();
+  const metadata=await page.evaluate(async()=>chrome.storage.session.get(null));
+  assert.ok(!Object.keys(metadata).some(k=>/Dataset|Jobs|Records/.test(k)));
+  const workEvent=context.waitForEvent('page');
+  await page.evaluate(async url=>{const binding={type:'job-screen',tabId:Number(new URL(location.href).searchParams.get('tab')),nonce:new URL(location.href).searchParams.get('nonce')};const access=await chrome.runtime.sendMessage({...binding,action:'access-begin'});chrome.runtime.sendMessage({...binding,action:'load',ticket:access.result.ticket,url}).catch(()=>{});},base+'/slow');
+  const working=await workEvent,closed=working.waitForEvent('close'),dashboardClosed=page.waitForEvent('close');
+  await page.locator('#app-close').click();await dashboardClosed;await closed;assert.equal(source.isClosed(),false);
+  pass('closing during a pending detail removes the owned work tab and leaves no job session storage');
+  console.log('Generic collection checks passed: '+passed);
+})().catch(e=>{console.error(e);process.exitCode=1;}).finally(async()=>{
+  await context?.close();await new Promise(resolve=>server?server.close(resolve):resolve());
+  const target=path.resolve(testRoot);if(path.dirname(target)===tempRoot&&path.basename(target).startsWith('job-generic-test-'))fs.rmSync(target,{recursive:true,force:true,maxRetries:3});
+});

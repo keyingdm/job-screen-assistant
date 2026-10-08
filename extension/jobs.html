@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>岗位筛选助手</title><link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="jobs.css"></head>
+<body class="jobs-app">
+<header><div class="brand-icon" aria-hidden="true">⌘</div><div><h1>岗位筛选助手 <span class="badge">0.1.0</span></h1><p>把岗位放在一起，把选择留给自己。</p></div><a href="help.html" target="_blank" rel="noopener">使用指南 ↗</a><button id="app-close" class="icon-button" aria-label="关闭筛选台" title="关闭筛选台">×</button></header>
+<main>
+<section class="collection-box" aria-label="岗位采集">
+<div class="hero-copy"><span class="eyebrow">你的求职工作台</span><h2>从一整页岗位，到你的投递清单。</h2><p>普通结果只在本次筛选中保留。收藏后，岗位资料和链接才会保存到本机。</p></div>
+<div class="collection-controls"><p id="source-label" class="source-label">先打开招聘列表，再点击浏览器工具栏的插件图标。</p><div class="toolbar"><button id="collect" class="primary">开始采集当前列表</button><button id="resume" class="secondary" hidden>继续本次采集</button><button id="pause" class="secondary" hidden>暂停</button><button id="sample" class="subtle">体验虚构示例</button></div><p class="hint">沿用原网页的公司、城市等条件，从当前页读取后续分页。采集时原页会自动翻页，请在这里操作。</p></div>
+<progress id="progress" value="0" max="1" aria-label="岗位收集进度"></progress><p id="coverage">下次打开只显示收藏；未收藏的岗位不自动保存。</p><p id="status" role="status" aria-live="polite"></p>
+<p class="access-note hint">访问保护：同站自动操作至少间隔 3 秒；每轮最多 200 个岗位、30 页、400 次自动访问操作。遇到访问限制立即停止，已有结果保留；不会自动重试。</p>
+<div id="detail-permission" class="access-note" hidden><p id="detail-permission-note"></p><button id="authorize-details" class="primary">授权详情站点并继续</button></div>
+<div class="task-controls"><label>结果来源<select id="task-source"><option value="all">合并所有本轮来源</option></select></label><button id="end-task" class="secondary">结束并清空</button><button class="subtle" disabled title="已预留接入接口，尚未配置服务">AI 辅助 · 待配置</button></div><div id="task-list" class="task-list" aria-label="本轮网站任务"></div>
+<details class="recognition"><summary>识别不准？指定岗位区域或翻页按钮</summary><p class="hint">在原网页点选并确认，规则只存在本机。点击“扩大区域”可以选择整个岗位列表；关闭或 Esc 可取消。</p><div class="toolbar"><button class="secondary pick" data-kind="area">指定岗位区域</button><button class="secondary pick" data-kind="title">指定岗位标题</button><button class="secondary pick" data-kind="next">指定下一页</button><button id="clear-rule" class="subtle">清除本页规则</button></div></details>
+</section>
+<nav class="workspace-nav" aria-label="岗位集合"><div class="tabs"><button id="tab-favorites" class="tab active" aria-selected="true">我的收藏 <span id="favorites-count">0</span></button><button id="tab-session" class="tab" aria-selected="false">本次筛选 <span id="session-count">0</span></button></div><div class="view-switch" aria-label="显示方式"><button id="view-table" class="active" aria-pressed="true">表格</button><button id="view-cards" aria-pressed="false">卡片</button></div></nav>
+<div class="workspace"><aside>
+  <section class="filter-section"><div class="section-title"><h2>我的条件</h2><button id="clear-profile" class="subtle">清空条件</button></div><p class="hint">只比较你填写的条件。自动判断覆盖有限，原文中的其他要求仍需核对。</p>
+  <div class="fields">
+    <label>最高学历<select id="my-degree"><option value="">未设置</option><option>专科</option><option>本科</option><option>硕士</option><option>博士</option></select></label>
+    <label>毕业年份<input id="my-year" type="number" min="2000" max="2100" placeholder="例如 2027"></label>
+    <label class="wide">我的完整专业<input id="my-major" list="major-list" placeholder="例如 电子信息科学与技术"><datalist id="major-list"></datalist><span class="hint">填写专业全称，用于资格判断；简称放在下方检索。</span></label>
+    <label>相关工作年限<input id="my-experience" type="number" min="0" max="60" step="0.5" placeholder="应届生可填 0"></label>
+    <label>英语证书<select id="my-english"><option value="">未设置</option><option value="0">无四 / 六级</option><option value="1">已过四级</option><option value="2">已过六级</option></select></label>
+  </div><p id="major-profile-note" class="hint"></p><p id="saved" class="hint" role="status">筛选条件保存在本机，不发送个人条件到招聘网站或 AI。</p></section>
+  <section class="filter-section"><div class="section-title"><h2>筛选偏好</h2><button id="reset" class="subtle">清空偏好</button></div><p class="hint">关键词可填多个，用逗号分隔；同一栏满足任意一个即可。空白表示不限。</p>
+  <div class="fields">
+    <label class="wide">城市<input id="filter-city" list="city-list" placeholder="例如 南昌,深圳,武汉"><datalist id="city-list"></datalist></label>
+    <label class="wide">岗位 / 工作内容<input id="filter-role" placeholder="例如 嵌入式,测试,运维"></label>
+    <label class="wide">公司 / 上级单位<input id="filter-company" list="company-list" placeholder="输入公司或集团关键词"><datalist id="company-list"></datalist></label>
+    <label class="wide">专业检索词<input id="filter-major" placeholder="例如 电气 / 电子信息,通信"><span class="hint">仅匹配专业要求，支持部分名称；技能描述不算专业命中。</span></label>
+    <label class="wide">专业检索范围<select id="filter-majorMode"><option value="">保留命中、不限和待确认</option><option value="hit">只看专业词命中</option></select><span class="hint">默认保留专业不明的岗位，避免漏掉；明确未命中或排除项不计为命中。</span></label>
+    <label class="wide">排除关键词<input id="filter-exclude" placeholder="例如 销售,夜班,驻场"></label>
+    <label class="wide">待遇 / 福利关键词<input id="filter-benefits" placeholder="例如 双休,五险一金,餐补"></label>
+    <label>工作性质<select id="filter-nature"><option value="">不限</option><option>全职</option><option>实习</option><option>兼职</option></select></label>
+    <label>即将截止<select id="filter-days"><option value="">不限</option><option value="3">3 天内</option><option value="7">7 天内</option><option value="30">30 天内</option></select></label>
+    <label>判断结果<select id="filter-state"><option value="">全部</option><option value="pass">所选条件未见冲突</option><option value="review">待确认</option><option value="fail">存在明确冲突</option></select></label>
+    <label>本地投递标记<select id="filter-mark"><option value="">全部</option><option>未标记</option><option>准备投递</option><option>已投递</option><option>不考虑</option></select></label>
+  </div>
+  <label class="check"><input id="filter-hideConflicts" type="checkbox">隐藏存在明确冲突的岗位</label>
+  <label class="check"><input id="filter-hideDegreeConflicts" type="checkbox">只隐藏学历明确不符的岗位</label>
+  <label class="check"><input id="filter-onlyOpen" type="checkbox">隐藏已截止 / 明确不可投递</label>
+  <label class="check"><input id="filter-favorite" type="checkbox">只看收藏</label>
+  </section>
+  <details class="filter-section"><summary>筛选结果怎样理解？</summary><p>“未见冲突”仅表示你选择的条件与程序提取到的条件未发现冲突，并不代表满足全部招聘要求。</p><p>专业相关性、技能熟练程度、学校范围、全日制、证书、政治面貌、年龄等复杂条件需看原文。未明确的信息保留为“待确认”。</p><p>“排除关键词”会搜索岗位、任职要求、职责和福利，可能把“无需出差”等表述也排除；使用后请核对结果数量。</p></details>
+</aside>
+<section class="results" aria-label="岗位筛选结果"><div id="stats" class="stats"></div>
+<div class="result-tools"><input id="filter-query" type="search" aria-label="搜索全部岗位内容" placeholder="搜索岗位、公司、要求…"><select id="filter-sort" aria-label="排序"><option value="match">专业匹配优先 · 冲突靠后</option><option value="deadline">截止日期优先</option><option value="company">按公司排序</option></select><button id="export-csv" class="secondary">导出结果 CSV</button><button id="export-json" class="subtle">备份收藏</button><label class="import-button">导入收藏<input id="import-json" type="file" accept="application/json,.json" hidden></label></div>
+<p id="result-count" class="hint"></p><p id="major-result-count" class="major-summary" hidden></p><div id="jobs"></div><div class="pagination"><button id="prev" class="secondary">上一页</button><span id="page-info"></span><button id="next" class="secondary">下一页</button></div></section></div></main>
+<dialog id="detail" aria-label="岗位详情"><div class="detail-head"><div><span class="eyebrow">岗位详情与原文依据</span><h2 id="detail-name"></h2><p id="detail-meta"></p></div><button id="detail-close" class="icon-button" aria-label="关闭岗位详情" title="关闭详情">×</button></div><div id="detail-body"></div></dialog>
+<script src="storage.js"></script><script src="jobs-access.js"></script><script src="jobs-major-data.js"></script><script src="jobs-majors.js"></script><script src="jobs-core.js"></script><script src="jobs-page.js"></script><script src="jobs-collector.js"></script><script src="jobs-tasks.js"></script><script src="jobs-ai.js"></script><script src="jobs-sample.js"></script><script src="jobs.js"></script>
+</body></html>
