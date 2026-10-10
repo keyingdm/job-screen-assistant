@@ -23,9 +23,9 @@ async function widget(page,selector,operation='text',value=''){
     }
     if(u.pathname==='/denied'&&id==='2'){res.statusCode=429;res.setHeader('Retry-After','1800');return res.end('Too many requests');}
     if(u.pathname==='/detail'||u.pathname==='/denied'){
-      const content='<h2>【职位描述】</h2><p>负责虚构技术工作。</p><h2>【任职资格】</h2><p>'+(id==='1'?'硕士研究生及以上学历，理学、工学等相关专业。':'本科及以上学历，电子信息科学与技术相关专业。')+'</p><h2>【福利待遇】</h2><p>虚构福利。</p>';
+      const content='<h2>【职位描述】</h2><p>负责虚构技术工作。</p><h2>【任职资格】</h2><p>'+(id==='1'?'理学、工学等相关专业。':'电子信息科学与技术相关专业。')+'</p><h2>【福利待遇】</h2><p>虚构福利。</p>';
       // The second detail initially contains only degree metadata, then loads full qualifications.
-      return res.end('<main><h1>虚构跨站岗位'+id+'</h1>'+(id==='2'?'<div id="requirements"></div>':content)+'</main>'+(id==='2'?'<script type="application/ld+json">'+JSON.stringify({'@type':'JobPosting',title:'虚构跨站岗位2',educationRequirements:'本科'})+'</script><script>setTimeout(()=>document.getElementById("requirements").innerHTML='+JSON.stringify(content)+',900)</script>':''));
+      return res.end('<section class="job-summary"><h1>虚构跨站岗位'+id+'</h1><p>'+(id==='1'?'硕士研究生及以上':'本科及以上')+'</p></section><main>'+(id==='2'?'<div id="requirements"></div>':content)+'</main>'+(id==='2'?'<script type="application/ld+json">'+JSON.stringify({'@type':'JobPosting',title:'虚构跨站岗位2',educationRequirements:'本科'})+'</script><script>setTimeout(()=>document.getElementById("requirements").innerHTML='+JSON.stringify(content)+',900)</script>':''));
     }
     res.statusCode=404;res.end('not found');
   });await new Promise(r=>server.listen(0,'127.0.0.1',r));base='http://127.0.0.1:'+server.address().port;detail='http://localhost:'+server.address().port;
@@ -46,7 +46,7 @@ async function widget(page,selector,operation='text',value=''){
   pass('bracketed headings, mixed qualification prose and structured description text preserve literal major requirements');
   await hub.locator('#collect').click();await hub.locator('#status').filter({hasText:'本次采集结束'}).waitFor();assert.equal(await hub.locator('.job-row').count(),2);
   const rows=await hub.locator('.job-row').allTextContents();assert.ok(rows.every(s=>!s.includes('详情中未提取到专业条款')));assert.ok(rows.some(s=>s.includes('理学、工学')));assert.equal(traffic.filter(r=>r.path==='/detail'&&r.id==='2').length,2);
-  pass('authorized foreign static and rendered details are collected, and a degree-only static shell waits for the actual qualifications');
+  pass('static and dynamic details merge degree badges outside main with qualifications, and degree-only shells still wait for the actual text');
   const conflict=hub.locator('.job-row').filter({hasText:'虚构跨站岗位1'});assert.match(await conflict.textContent(),/学历冲突/);assert.match(await conflict.locator('.conflict-reason').textContent(),/硕士及以上/);
   await hub.locator('#view-cards').click();assert.match(await hub.locator('.job-card').filter({hasText:'虚构跨站岗位1'}).textContent(),/学历冲突/);await hub.locator('#view-table').click();
   await source.locator('#job-screen-widget').waitFor();assert.match(await widget(source,'section'),/学历要求：硕士及以上/);

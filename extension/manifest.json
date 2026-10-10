@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "岗位筛选助手",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "独立收集和筛选招聘岗位，按学历、城市、专业、工作内容等条件核对原文与管理收藏。",
   "minimum_chrome_version": "128",
   "permissions": ["activeTab", "scripting", "storage", "webRequest"],

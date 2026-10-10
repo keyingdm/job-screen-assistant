@@ -1,6 +1,6 @@
 {
   "name": "job-screen-assistant",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "独立的校园招聘岗位收集与筛选浏览器插件",
   "scripts": {
@@ -10,6 +10,7 @@
     "test:recognition": "node tests/jobs-recognition.browser.cjs",
     "test:multisite": "node tests/jobs-multisite.browser.cjs",
     "test:access": "node tests/jobs-access.browser.cjs",
+    "test:boundaries": "node tests/jobs-boundaries.browser.cjs",
     "test:details": "node tests/jobs-details.browser.cjs",
     "package": "python tools/package_extension.py"
   },

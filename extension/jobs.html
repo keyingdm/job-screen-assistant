@@ -1,13 +1,13 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>岗位筛选助手</title><link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="jobs.css"></head>
 <body class="jobs-app">
-<header><div class="brand-icon" aria-hidden="true">⌘</div><div><h1>岗位筛选助手 <span class="badge">0.1.0</span></h1><p>把岗位放在一起，把选择留给自己。</p></div><a href="help.html" target="_blank" rel="noopener">使用指南 ↗</a><button id="app-close" class="icon-button" aria-label="关闭筛选台" title="关闭筛选台">×</button></header>
+<header><div class="brand-icon" aria-hidden="true">⌘</div><div><h1>岗位筛选助手 <span class="badge">0.1.1</span></h1><p>把岗位放在一起，把选择留给自己。</p></div><a href="help.html" target="_blank" rel="noopener">使用指南 ↗</a><button id="app-close" class="icon-button" aria-label="关闭筛选台" title="关闭筛选台">×</button></header>
 <main>
 <section class="collection-box" aria-label="岗位采集">
 <div class="hero-copy"><span class="eyebrow">你的求职工作台</span><h2>从一整页岗位，到你的投递清单。</h2><p>普通结果只在本次筛选中保留。收藏后，岗位资料和链接才会保存到本机。</p></div>
 <div class="collection-controls"><p id="source-label" class="source-label">先打开招聘列表，再点击浏览器工具栏的插件图标。</p><div class="toolbar"><button id="collect" class="primary">开始采集当前列表</button><button id="resume" class="secondary" hidden>继续本次采集</button><button id="pause" class="secondary" hidden>暂停</button><button id="sample" class="subtle">体验虚构示例</button></div><p class="hint">沿用原网页的公司、城市等条件，从当前页读取后续分页。采集时原页会自动翻页，请在这里操作。</p></div>
 <progress id="progress" value="0" max="1" aria-label="岗位收集进度"></progress><p id="coverage">下次打开只显示收藏；未收藏的岗位不自动保存。</p><p id="status" role="status" aria-live="polite"></p>
-<p class="access-note hint">访问保护：同站自动操作至少间隔 3 秒；每轮最多 200 个岗位、30 页、400 次自动访问操作。遇到访问限制立即停止，已有结果保留；不会自动重试。</p>
+<p class="access-note hint">访问保护：同站自动操作至少间隔 3 秒；不设固定岗位数、分页数或操作总数上限；读取到列表结束或无新增岗位时停止。遇到访问限制立即停止，已有结果保留；不会自动重试。</p>
 <div id="detail-permission" class="access-note" hidden><p id="detail-permission-note"></p><button id="authorize-details" class="primary">授权详情站点并继续</button></div>
 <div class="task-controls"><label>结果来源<select id="task-source"><option value="all">合并所有本轮来源</option></select></label><button id="end-task" class="secondary">结束并清空</button><button class="subtle" disabled title="已预留接入接口，尚未配置服务">AI 辅助 · 待配置</button></div><div id="task-list" class="task-list" aria-label="本轮网站任务"></div>
 <details class="recognition"><summary>识别不准？指定岗位区域或翻页按钮</summary><p class="hint">在原网页点选并确认，规则只存在本机。点击“扩大区域”可以选择整个岗位列表；关闭或 Esc 可取消。</p><div class="toolbar"><button class="secondary pick" data-kind="area">指定岗位区域</button><button class="secondary pick" data-kind="title">指定岗位标题</button><button class="secondary pick" data-kind="next">指定下一页</button><button id="clear-rule" class="subtle">清除本页规则</button></div></details>

@@ -158,9 +158,9 @@ test('unknown or incomplete total never claims full coverage', async () => {
   await C.collect(options(middle,{read:async()=>listing(['1','2','3'],false,{pageNumber:4})}));
   assert.equal(middle.complete,false); assert.equal(middle.startedMidList,true);
 });
-test('repeated pages stop rather than reporting completion', async () => {
+test('repeated pages stop discovery without claiming full coverage', async () => {
   const d=C.session('https://example.test/list');
-  await assert.rejects(C.collect(options(d,{next:async()=>listing(['1','2'],true)})),/内容|没有变化/);
+  await C.collect(options(d,{next:async()=>listing(['1','2'],true)}));assert.match(d.stopReason,/没有变化/);
   assert.equal(d.jobs.length,2); assert.equal(d.complete,false);
 });
 test('pause resumes the same in-memory page without losing items', async () => {
@@ -295,8 +295,8 @@ test('AI integration is disabled by default and requires explicit request scope'
   await assert.rejects(AI.run({operation:'extract',jobs,consent:true}),/原文依据/);
 });
 
-test('production access limits are finite and conservative',()=>{
-  assert.equal(A.policy.intervalMs,3000);assert.equal(A.policy.maxJobs,200);assert.equal(A.policy.maxPages,30);assert.equal(A.policy.maxActions,400);
+test('production pacing has no fixed job, page or operation count cap',()=>{
+  assert.equal(A.policy.intervalMs,3000);assert.equal(A.policy.maxJobs,Infinity);assert.equal(A.policy.maxPages,Infinity);assert.equal(A.policy.maxActions,Infinity);
   assert.equal(A.read(A.error(A.record('captcha','请核对原站'))).reason,'请核对原站');
   assert.equal(A.read(Error('ordinary failure')),null);
 });
@@ -345,7 +345,7 @@ test('background resume retains the operation budget and overlapping refusals ne
   await assert.rejects(background.target(origin,'javascript:alert(1)'),/链接无效/);
   const first=await background.begin(1,2,origin);background.current(1,2,first.ticket).count=399;background.finish(1,2);
   const resumed=await background.begin(1,2,origin,true);assert.equal(background.current(1,2,resumed.ticket).count,399);
-  await background.permit(1,2,resumed.ticket);await assert.rejects(background.permit(1,2,resumed.ticket),e=>A.read(e)?.kind==='limit');
+  await background.permit(1,2,resumed.ticket);assert.equal(background.current(1,2,resumed.ticket).count,400);
   background.finish(1,2);const fresh=await background.begin(1,2,origin);assert.equal(background.current(1,2,fresh.ticket).count,0);
   const longer=Date.now()+3600000;await Promise.all([background.block(origin,A.record('rate','较长冷却',429,longer)),background.block(origin,A.record('refused','稍后拒绝',403))]);
   assert.ok(saved['jobAccessBlock:'+origin].until>=longer);await assert.rejects(background.begin(1,2,origin),e=>A.read(e)?.until>=longer);
@@ -359,9 +359,9 @@ test('refusal and captcha failures stop the whole collector without reading late
     assert.equal(calls.length,2);assert.equal(d.jobs[0].collectionState,'read');assert.equal(d.jobs[2].collectionState,'pending');assert.equal(d.stage,'blocked');assert.equal(d.complete,false);
   }
 });
-test('the discovery cap never inserts job 201 and still completes already discovered details',async()=>{
+test('an explicitly configured discovery cap preserves previously discovered details',async()=>{
   const d=C.session('https://one.invalid/list');let detailReads=0,advances=0;
-  await C.collect(options(d,{read:async()=>listing(Array.from({length:201},(_,i)=>String(i)),true,{total:201,jobs:Array.from({length:201},(_,i)=>raw(String(i),{requirements:'',collectionState:'pending'}))}),
+  await C.collect(options(d,{maxJobs:200,read:async()=>listing(Array.from({length:201},(_,i)=>String(i)),true,{total:201,jobs:Array.from({length:201},(_,i)=>raw(String(i),{requirements:'',collectionState:'pending'}))}),
     next:async()=>{advances++;throw Error('must not advance');},readDetail:async()=>{detailReads++;return {requirements:'本科，专业不限'};}}));
   assert.equal(d.jobs.length,200);assert.equal(detailReads,200);assert.equal(advances,0);assert.equal(d.stage,'limited');assert.equal(d.complete,false);
 });
@@ -369,4 +369,64 @@ test('the page cap stops further pagination while preserving useful detail resul
   const d=C.session('https://one.invalid/list');let advances=0;
   await C.collect(options(d,{maxPages:1,next:async()=>{advances++;throw Error('must not advance');}}));
   assert.equal(advances,0);assert.equal(d.jobs.length,2);assert.equal(d.stage,'limited');assert.equal(d.discoveryLimited,true);
+});
+
+
+test('default collection continues beyond 200 jobs and 30 pages and finishes every detail',async()=>{
+  const d=C.session('https://large.invalid/list');let page=0,details=0;
+  const batch=()=>{const first=page*20;page++;return listing(Array.from({length:20},(_,i)=>String(first+i)),page<35,{total:700,pageNumber:page,jobs:Array.from({length:20},(_,i)=>raw(String(first+i),{requirements:'',collectionState:'pending'}))});};
+  await C.collect(options(d,{read:async()=>batch(),next:async()=>batch(),readDetail:async()=>{details++;return {requirements:'本科及以上，专业不限。',completeness:'detail'};}}));
+  assert.equal(d.jobs.length,700);assert.equal(d.pages,35);assert.equal(details,700);assert.equal(d.complete,true);assert.equal(d.stage,'done');
+});
+test('default operation gate does not stop after action 400',async()=>{
+  const run={origin:'https://large.invalid',active:true,count:0},g=new A.Governor({intervalMs:0});
+  for(let i=0;i<450;i++)await g.permit(run);
+  assert.equal(run.count,450);
+});
+test('reordered duplicate pages stop discovery and still finish pending details',async()=>{
+  const d=C.session('https://large.invalid/list');let advances=0,details=0;
+  await C.collect(options(d,{read:async()=>listing(['1','2'],true,{total:null,jobs:['1','2'].map(id=>raw(id,{requirements:'',collectionState:'pending'}))}),next:async()=>{advances++;return listing(['2','1'],true,{total:null});},readDetail:async()=>{details++;return {requirements:'本科，专业不限'};}}));
+  assert.equal(advances,1);assert.equal(details,2);assert.equal(d.jobs.length,2);assert.equal(d.complete,false);assert.match(d.stopReason,/没有新增岗位/);
+});
+test('contradictory degree statements preserve both sources and require review',()=>{
+  const j=job('学历要求：本科及以上\n任职条件：硕士及以上学历，专业不限。');
+  assert.equal(j.facts.degree.uncertain,true);assert.match(j.facts.degree.label,/表述不一致/);
+  assert.equal(J.evaluate(j,{degree:'本科'}).state,'review');assert.equal(J.evaluate(j,{degree:'硕士'}).state,'review');
+  assert.equal(job('本科及以上学历；硕士优先').facts.degree.uncertain,false);
+});
+
+
+test('pausing during a batched large page retains unpublished jobs and resumes later pages',async()=>{
+  const d=C.session('https://large.invalid/list'),controller=new AbortController();let calls=0;
+  const batch=listing(Array.from({length:100},(_,i)=>String(i)),true,{total:102});
+  await assert.rejects(C.collect(options(d,{signal:controller.signal,read:async()=>batch,onUpdate:s=>{if(s.jobs.length===1)setTimeout(()=>controller.abort(),0);}})),{name:'AbortError'});
+  assert.ok(d.jobs.length>=50&&d.jobs.length<100);assert.equal(d.pageOffset,d.jobs.length);
+  await C.collect(options(d,{next:async()=>{calls++;return listing(['100','101'],false,{total:102,pageNumber:2});}}));
+  assert.equal(d.jobs.length,102);assert.equal(calls,1);assert.equal(d.complete,true);
+});
+test('pausing at the last item of a resumed page does not stop later discovery',async()=>{
+  const d=C.session('https://large.invalid/list');await C.collect(options(d,{maxPages:1}));
+  d.discoveryLimited=false;d.listEnded=false;d.currentPage=listing(['3'],true,{total:4,pageNumber:2});d.pageOffset=1;
+  d.jobs.push(J.normalize(raw('3'),'page'));d.identities.push('3');
+  await C.collect(options(d,{next:async()=>listing(['4'],false,{total:4,pageNumber:3})}));
+  assert.equal(d.jobs.length,4);assert.equal(d.complete,true);
+});
+
+
+test('graduate degree names are recognized as full tokens',()=>{
+  assert.equal(job('博士研究生及以上学历').facts.degree.rank,4);
+  assert.equal(job('硕士研究生及以上学历').facts.degree.rank,3);
+  assert.equal(J.evaluate(job('博士研究生及以上学历'),{degree:'硕士'}).state,'fail');
+});
+test('detail prose preserves missing degree evidence from the list with source attribution',async()=>{
+  const d=C.session('https://large.invalid/list');
+  await C.collect(options(d,{read:async()=>listing(['1'],false,{total:1,jobs:[raw('1',{requirements:'学历要求：本科及以上',collectionState:'pending'})]}),readDetail:async()=>({requirements:'电子信息类专业；熟悉设备。',completeness:'detail'})}));
+  assert.equal(d.jobs[0].facts.degree.rank,2);assert.equal(d.jobs[0].facts.degree.minimum,true);assert.match(d.jobs[0].requirements,/来源列表/);
+});
+test('unchanged and empty later pages still finish all discovered details',async()=>{
+  for(const nextPage of [listing(['1','2'],true,{total:null}),listing([],false,{total:null})]){
+    const d=C.session('https://large.invalid/list');let details=0;
+    await C.collect(options(d,{read:async()=>listing(['1','2'],true,{total:null,jobs:['1','2'].map(id=>raw(id,{requirements:'',collectionState:'pending'}))}),next:async()=>nextPage,readDetail:async()=>{details++;return {requirements:'本科及以上，专业不限'};}}));
+    assert.equal(details,2);assert.equal(d.jobs.length,2);assert.equal(d.complete,false);assert.ok(d.jobs.every(j=>j.collectionState==='read'));
+  }
 });

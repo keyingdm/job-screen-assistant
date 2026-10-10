@@ -27,7 +27,7 @@ globalThis.JobScreenAccessBackground = (() => {
     const saved = await blocked(origin); if (saved) throw A.error(saved);
     finish(owner, source);
     const k = key(owner, source);
-    if (resume && !budgets.has(k)) throw A.error(A.record('cancelled', '访问预算连接已结束，请手动重新开始。'));
+    if (resume && !budgets.has(k)) throw A.error(A.record('cancelled', '本轮访问连接已结束，请手动重新开始。'));
     const run = { owner, source, origin, origins: new Set([origin]), ticket: crypto.randomUUID(), active: true, count: resume ? budgets.get(k) : 0 }; budgets.set(k, run.count);
     runs.set(key(owner, source), run); tabs.set(source, run); return { ticket: run.ticket, policy: A.policy };
   }

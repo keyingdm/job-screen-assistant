@@ -111,6 +111,32 @@ const cards=count=>Array.from({length:count},(_,i)=>'<div class="styled__ListIte
   assert.equal(embedded.raw.name,'虚构研发工程师');assert.match(embedded.raw.requirements,/理工类相关专业/);
   assert.doesNotMatch(embedded.raw.requirements,/电气专业知识|法学专业/);assert.equal(embedded.result.kind,'broad');assert.equal(embedded.search.hit,false);
   pass('unlabelled qualification clauses inside a detail are found without turning duties or recommendations into professional requirements');
+  const metadata=await page.evaluate(()=>{
+    const body='<h2>专业要求</h2><p>电气工程及其自动化、电子信息类等相关专业</p><h2>工作职责</h2><p>负责虚构本科课程设备的质量管理。</p><h2>任职要求</h2><p>电子信息类等相关专业；熟悉质量管理。</p>';
+    const headers=['<h1>虚构质量工程师</h1><p>示例测试有限公司 ｜ 武汉市 ｜ 本科及以上 ｜ 招聘若干人</p>', '<h1>虚构质量工程师</h1><div><span>示例测试有限公司</span><span>武汉市</span><span>硕士研究生或以上</span><span>招聘若干人</span></div>'];
+    const documents=[headers[0]+body, headers[1]+body, '<h1>虚构质量工程师</h1><table><tr><th>学历要求</th><td>硕士及以上</td><th>英语要求</th><td>英语六级</td></tr></table>'+body, '<h1>虚构质量工程师</h1><dl><dt>学历</dt><dd>博士研究生及以上</dd><dt>经验要求</dt><dd>3年以上工作经验</dd></dl>'+body, '<h1>虚构质量工程师</h1><h2>学历要求</h2><p>学历不限</p>'+body];
+    return documents.map(html=>{const doc=new DOMParser().parseFromString('<main>'+html+'<aside><h2>推荐岗位</h2><p>博士学历；法学专业</p></aside></main>','text/html');const raw=JobScreenPage.scanDocument(doc,'https://example.invalid/metadata',{},true).jobs[0];return {raw,facts:JobScreen.normalize(raw).facts};});
+  });
+  assert.deepEqual(metadata.map(v=>v.facts.degree.rank),[2,3,3,4,0]);assert.equal(metadata[0].facts.degree.minimum,true);assert.equal(metadata[1].facts.degree.minimum,true);assert.equal(metadata[4].facts.degree.unrestricted,true);
+  assert.equal(metadata[2].facts.english.rank,2);assert.equal(metadata[3].facts.experience.min,3);assert.ok(metadata.every(v=>!v.raw.requirements.includes('法学')));
+  pass('top metadata, inline badges, tables, definition lists and separate degree fields merge with qualification text and preserve other explicit conditions');
+  const outside=await page.evaluate(()=>{
+    const html='<header><h1>示例招聘门户</h1><nav>本科课程</nav></header><section class="job-summary"><h1>虚构质量工程师</h1><p>示例测试有限公司 ｜ 武汉市 ｜ 本科及以上</p></section><main><h2>专业要求</h2><p>电子信息类</p><h2>任职要求</h2><p>电子信息类等相关专业。</p><h2>相关推荐</h2><p>博士学历；法学专业</p></main>';
+    return JobScreenPage.scanDocument(new DOMParser().parseFromString(html,'text/html'),'https://example.invalid/separate-header',{},true).jobs[0];
+  });assert.equal(outside.name,'虚构质量工程师');assert.match(outside.requirements,/本科及以上/);assert.doesNotMatch(outside.requirements,/博士|法学|课程/);
+  const missing=await page.evaluate(()=>{
+    const html='<main><h1>虚构课程工程师</h1><h2>工作职责</h2><p>负责本科课程；协助硕士项目。</p><h2>任职要求</h2><p>专业不限；熟悉设备。</p><div hidden>学历：博士</div><section class="recommend"><p>学历：硕士</p></section></main>';
+    return JobScreen.normalize(JobScreenPage.scanDocument(new DOMParser().parseFromString(html,'text/html'),'https://example.invalid/no-degree',{},true).jobs[0]).facts.degree;
+  });assert.equal(missing.rank,0);
+  const renderedHidden=await page.evaluate(()=>{
+    const wrapper=document.createElement('div');wrapper.innerHTML='<style>.fixture-hidden-degree{display:none}</style><article id="fixture-detail"><h1>虚构可见岗位</h1><div class="fixture-hidden-degree">学历要求：博士</div><h2>任职要求</h2><p>专业不限；熟悉设备。</p></article>';document.body.append(wrapper);
+    try{const raw=JobScreenPage.scanDocument(document,'https://example.invalid/live-hidden',{area:'#fixture-detail'},true).jobs[0];return {...JobScreen.normalize(raw).facts.degree,name:raw.name};}finally{wrapper.remove();}
+  });assert.equal(renderedHidden.rank,0);assert.equal(renderedHidden.name,'虚构可见岗位');
+  pass('separate job headers are read while portal navigation, hidden text, duties and recommended-job degrees are excluded');
+  const disagreement=await page.evaluate(()=>{
+    const raw=JobScreenPage.scanDocument(new DOMParser().parseFromString('<main><h1>虚构矛盾学历岗位</h1><p>本科及以上</p><h2>任职要求</h2><p>硕士及以上学历，专业不限。</p></main>','text/html'),'https://example.invalid/conflict',{},true).jobs[0];return JobScreen.evaluate(JobScreen.normalize(raw),{degree:'本科'});
+  });assert.equal(disagreement.state,'review');assert.match(disagreement.checks[0].evidence,/本科/);assert.match(disagreement.checks[0].evidence,/硕士/);
+  pass('inconsistent header and body degrees preserve both statements instead of silently accepting the lower threshold');
   assert.ok(detailRequests>0);
   console.log('Recognition checks passed: '+passed);
 })().catch(e=>{console.error(e);process.exitCode=1;}).finally(async()=>{

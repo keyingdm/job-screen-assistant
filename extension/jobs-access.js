@@ -1,6 +1,6 @@
 (function (root) {
   'use strict';
-  const policy = Object.freeze({ intervalMs: 3000, maxActions: 400, maxJobs: 200, maxPages: 30, cooldownMs: 600000 });
+  const policy = Object.freeze({ intervalMs: 3000, maxActions: Infinity, maxJobs: Infinity, maxPages: Infinity, cooldownMs: 600000 });
   function record(kind, reason, status = 0, until = 0) { return { kind, reason, status, until }; }
   function error(stop) {
     const e = Error('[JOB_ACCESS:' + stop.kind + ':' + (stop.status || 0) + ':' + (stop.until || 0) + '] ' + stop.reason);

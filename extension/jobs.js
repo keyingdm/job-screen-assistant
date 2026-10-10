@@ -200,7 +200,7 @@
     $('resume').hidden = value || !task?.dataset || ['done','blocked','limited','permission','stopped'].includes(task.dataset.stage) || task.id === 'sample';
     const permission = task?.dataset?.stage === 'permission' && task.dataset.accessStop?.origin;
     $('detail-permission').hidden = !permission; $('authorize-details').disabled = Boolean(value);
-    $('detail-permission-note').textContent = permission ? '岗位详情位于 ' + permission + '。授权后只读取岗位详情，沿用本轮进度和剩余访问预算。' : '';
+    $('detail-permission-note').textContent = permission ? '岗位详情位于 ' + permission + '。授权后只读取岗位详情，沿用本轮进度和访问间隔。' : '';
     $('end-task').disabled = selectedTask === 'all' ? ![...tasks.items.values()].some(t => t.busy || t.dataset) : !task?.busy && !task?.dataset;
   }
   function renderTasks() {

@@ -14,10 +14,12 @@
     const hard = parts.filter(v => !preferred(v) && !/在读|毕业时间/.test(v));
     const evidence = hard.join('；');
     if (!hard.length) return { label: /学历不限|不限学历/.test(value) ? '学历不限' : '未明确', rank: 0, evidence: parts.join('；'), unrestricted: /学历不限|不限学历/.test(value) };
-    const ranks = [...evidence.matchAll(/专科|大专|高职|本科|学士|硕士|博士|研究生/g)].map(m => degreeRank(m[0]));
+    const ranks = [...evidence.matchAll(/博士研究生|硕士研究生|专科|大专|高职|本科|学士|硕士|博士|研究生/g)].map(m => degreeRank(m[0]));
     const rank = Math.min(...ranks), multiple = new Set(ranks).size > 1;
+    const singleRanks = hard.map(part => [...new Set([...part.matchAll(/博士研究生|硕士研究生|专科|大专|高职|本科|学士|硕士|博士|研究生/g)].map(m => degreeRank(m[0])))]).filter(r => r.length === 1).map(r => r[0]);
+    const conflicting = new Set(singleRanks).size > 1;
     const minimum = /及以上|或以上|以上|不低于|至少/.test(evidence);
-    return { label: degreeNames[rank - 1] + (minimum ? '及以上' : multiple ? '等（看原文）' : '（看原文）'), rank, minimum, exact: /仅限|只招|必须为/.test(evidence), uncertain: /可放宽|可考虑|优秀|在读|学位|不含|不包括/.test(evidence) || (multiple && !minimum), evidence };
+    return { label: conflicting ? '学历表述不一致（看原文）' : degreeNames[rank - 1] + (minimum ? '及以上' : multiple ? '等（看原文）' : '（看原文）'), rank, minimum, exact: /仅限|只招|必须为/.test(evidence), uncertain: conflicting || /可放宽|可考虑|优秀|在读|学位|不含|不包括/.test(evidence) || (multiple && !minimum), evidence };
   }
   function graduationInfo(value) {
     const evidence = clauses(value).filter(v => /(?:20\d{2}).{0,12}(?:届|毕业)|(?:届|毕业).{0,12}20\d{2}/.test(v)).join('；');

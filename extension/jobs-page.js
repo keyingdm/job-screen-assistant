@@ -15,7 +15,7 @@
   const clean = value => String(value || '').replace(/\r/g, '').trim().slice(0, 30000);
   function text(node) {
     if (!node) return '';
-    if (node.ownerDocument?.defaultView && typeof node.innerText === 'string') return clean(node.innerText);
+    if (node.isConnected && node.ownerDocument?.defaultView && typeof node.innerText === 'string') return clean(node.innerText);
     const parts = [];
     const walk = n => {
       if (n.nodeType === 3) { parts.push(n.textContent); return; }
@@ -75,6 +75,70 @@
     }
     return clean(out.join('\n'));
   }
+  function pairedField(value, node, labels) {
+    const inline = field(value, labels); if (inline) return inline;
+    const label = new RegExp('^(?:' + labels + ')\\s*[:：]?\\s*$', 'i');
+    for (const row of node.querySelectorAll('tr')) {
+      const cells = [...row.children];
+      for (let i = 0; i < cells.length - 1; i++) if (label.test(text(cells[i]))) return text(cells[i + 1]);
+    }
+    for (const term of node.querySelectorAll('dt')) if (label.test(text(term)) && term.nextElementSibling?.matches('dd')) return text(term.nextElementSibling);
+    const lines = value.split('\n').map(v => v.trim()).filter(Boolean), index = lines.findIndex(v => label.test(v));
+    return index >= 0 && lines[index + 1] && !FIELD_TITLE.test(lines[index + 1]) ? lines[index + 1] : '';
+  }
+  function degreeField(value, node) {
+    const explicit = pairedField(value, node, '学历要求|最低学历|教育程度|学历|学位要求|Education requirements|Education');
+    if (explicit) return explicit;
+    // Bare metadata badges count; mentions in responsibilities and recommended jobs do not.
+    const badge = /^(?:全日制\s*)?(?:大学)?(?:本科|学士|硕士研究生|博士研究生|硕士|博士|研究生|大专|专科|高职)(?=及以上|或以上|以上|及以下|以下|学历|学位|毕业|优先|优选|[、/／或（(\s]|$)|^(?:学历不限|不限学历)$/;
+    const boundary = value.split('\n').findIndex(line => REQUIRE.test(line.trim()) || DUTIES.test(line.trim()) || BENEFITS.test(line.trim()));
+    const summary = value.split('\n').slice(0, boundary < 0 ? undefined : boundary).join('\n');
+    const candidates = summary.split(/[\n|｜·•]+/).map(s => s.trim()).filter(s => s.length < 180 && badge.test(s));
+    if (candidates.length) return [...new Set(candidates)].join('\n');
+    for (const el of node.querySelectorAll('span,p,li,div,td,dd,[itemprop="educationRequirements"]')) {
+      if (el.children.length || el.closest('nav,footer,aside,[hidden],[aria-hidden="true"]')) continue;
+      const s = text(el);
+      if (s.length < 180 && badge.test(s) && summary.includes(s)) return s;
+    }
+    return '';
+  }
+  function detailScope(doc, area) {
+    const scope = doc.createElement('div');
+    const cloneVisible = node => {
+      const clone = node.cloneNode(true);
+      if (doc.defaultView && node.isConnected) {
+        const sources = [node, ...node.querySelectorAll('*')], copies = [clone, ...clone.querySelectorAll('*')];
+        sources.forEach((source, index) => {
+          const style = doc.defaultView.getComputedStyle(source);
+          if (style.display === 'none' || /^(?:hidden|collapse)$/.test(style.visibility)) copies[index].remove();
+        });
+      }
+      return clone;
+    };
+    const outside = [...doc.querySelectorAll('[class*="jobTitle" i],[class*="positionTitle" i],[class*="jobName" i],[class*="positionName" i],h1')]
+      .filter(el => !area.contains(el) && !el.closest('nav,footer,aside,[role=search],[class*="recommend" i]') && candidateName(el));
+    let header;
+    for (const title of outside) {
+      for (let n = title.parentElement, depth = 0; n && n !== doc.body && !n.contains(area) && depth < 6; n = n.parentElement, depth++) {
+        const value = text(n);
+        if (value.length > 8000 || [...n.querySelectorAll('h1,[class*="jobTitle" i],[class*="positionTitle" i]')].filter(candidateName).length > 1) break;
+        if (degreeField(value, n) || majorField(value, n)) { header = n; break; }
+      }
+      if (header) break;
+    }
+    if (header) scope.append(cloneVisible(header));
+    scope.append(cloneVisible(area));
+    for (const el of scope.querySelectorAll('nav,footer,aside,form,script,style,noscript,template,[role=search],[hidden],[aria-hidden="true"],[class*="recommend" i],[class*="related-jobs" i],[class*="similar-jobs" i]')) el.remove();
+    for (const el of [...scope.querySelectorAll('*')]) if (/display\s*:\s*none|visibility\s*:\s*hidden/i.test(el.getAttribute('style') || '')) el.remove();
+    // Recommendations may use a heading instead of a semantic container.
+    for (const heading of [...scope.querySelectorAll('h1,h2,h3,h4,h5,h6,p,div')]) {
+      if (!/^(?:相关推荐|推荐岗位|推荐职位|相似职位|其他职位|其他岗位|热门职位|猜你喜欢)\s*[:：]?\s*$/.test(text(heading))) continue;
+      let sibling = heading.nextSibling;
+      while (sibling) { const next = sibling.nextSibling; sibling.remove(); sibling = next; }
+      heading.remove();
+    }
+    return scope;
+  }
   function expiry(value) {
     const raw = value.match(/(?:报名截止日期|投递截止时间|截止时间|截止日期|申请截止)[：:\s]*(20\d{2})[年/.-](\d{1,2})[月/.-](\d{1,2})(?:日)?(?:[ T](\d{1,2}:\d{2}(?::\d{2})?))?/);
     return raw ? raw[1] + '-' + raw[2].padStart(2, '0') + '-' + raw[3].padStart(2, '0') + (raw[4] ? ' ' + raw[4] : '') : '';
@@ -104,12 +168,17 @@
     const identityText = lines.slice(0, boundary < 0 ? undefined : boundary).filter(line => !DETAIL_ACTION.test(line.trim()) && !/^(?:关闭详情|立即申请|申请|已申请|立即投递|投递|收藏|已收藏)$/.test(line.trim())).join('\n');
     let fingerprint = 2166136261;
     for (let i = 0; i < identityText.length; i++) fingerprint = Math.imul(fingerprint ^ identityText.charCodeAt(i), 16777619);
-    const degree = field(value, '学历要求|学历') || value.match(/(?:大学)?(?:本科|硕士研究生|博士研究生|硕士|博士|大专|专科)(?:及以上)?/)?.[0] || '';
+    const degree = degreeField(value, node);
     const major = majorField(value, node);
-    const summary = [degree && '学历要求：' + degree, major && '专业要求：' + major].filter(Boolean).join('\n');
+    const summaries = [degree && '学历要求：' + degree, major && '专业要求：' + major];
+    for (const [label, labels] of [['经验要求','工作经验|经验要求|经验'], ['英语要求','英语要求|英语水平|外语要求|语言要求'], ['毕业届别','毕业届别|毕业年份|届别要求'], ['资格要求','资格要求|资格证书|证书要求'], ['年龄要求','年龄要求']]) {
+      const found = pairedField(value, node, labels); if (found) summaries.push(label + '：' + found);
+    }
+    const merged = [requirement];
+    for (const line of [...summaries, ...clauses.split('\n')]) if (line && !merged.some(part => part && part.includes(line))) merged.push(line);
     return { id: url || base + '#job=' + encodeURIComponent(name + '|' + company(value, node, name) + '|' + city(value) + '|' + (fingerprint >>> 0).toString(36)), url: url || base,
       name, company: company(value, node, name), city: city(value), group: field(value, '所属单位|上级单位|所属集团'),
-      requirements: [requirement || summary, ...clauses.split('\n').filter(line => line && !(requirement || summary).includes(line))].filter(Boolean).join('\n'), majorRequirements: major, description: section(value, DUTIES), benefits: section(value, BENEFITS),
+      requirements: merged.filter(Boolean).join('\n'), majorRequirements: major, description: section(value, DUTIES), benefits: section(value, BENEFITS),
       nature: field(value, '岗位性质|工作性质') || value.match(/(?:全职|实习|兼职|合同工)/)?.[0] || '',
       closes: expiry(value), completeness: requirement || (detailOnly && (major || clauses)) ? 'detail' : detailOnly ? 'detail-summary' : 'list-summary', linkKind: url ? 'detail' : 'list',
       collectionState: requirement ? 'read' : 'pending' };
@@ -198,12 +267,12 @@
       if (!url && doc.defaultView) job.titleSelector = selector(el);
       const btn = [...card.querySelectorAll('button,a,[role=button]')].find(b => DETAIL_ACTION.test(text(b)) && visible(b));
       if (btn && doc.defaultView) job.expandSelector = selector(btn);
-      jobs.push(job); if (jobs.length >= 6000) break;
+      jobs.push(job);
     }
     if (!jobs.length || detailOnly) {
-      const detailArea = doc.querySelector('main,[role=main],article,.content') || area;
+      const detailArea = detailScope(doc, rule.area ? area : doc.querySelector('main,[role=main],article,.content') || area);
       const value = text(detailArea), req = section(value, REQUIRE);
-      if (value.split('\n').some(line => REQUIRE.test(line.trim())) || (detailOnly && (/(?:学历要求|专业要求)\s*[:：]\s*\S/.test(value) || qualificationClauses(value)))) {
+      if (value.split('\n').some(line => REQUIRE.test(line.trim())) || (detailOnly && (degreeField(value, detailArea) || majorField(value, detailArea) || qualificationClauses(value)))) {
         const explicit = [...detailArea.querySelectorAll('[class*="jobTitle" i],[class*="positionTitle" i],[class*="jobName" i],[class*="positionName" i]')].map(candidateName).find(Boolean);
         const title = explicit || [...detailArea.querySelectorAll('h1,h2,h3')].map(candidateName).find(Boolean) || '';
         const job = facts(detailArea, base, field(value, '招聘岗位|岗位名称|职位名称') || title, base, true);
@@ -233,7 +302,7 @@
     let result = scanDocument(document, location.href, rule, detailOnly);
     if (expand) {
       let changed = false;
-      for (const job of result.jobs.slice(0, root.JobScreenAccess?.policy.maxJobs || 200)) if (job.expandSelector && job.collectionState !== 'read') {
+      for (const job of result.jobs) if (job.expandSelector && job.collectionState !== 'read') {
         const btn = document.querySelector(job.expandSelector);
         if (btn && DETAIL_ACTION.test(text(btn))) { await permit?.(); const blocked = root.JobScreenAccess?.detectDocument(document); if (blocked) throw root.JobScreenAccess.error(blocked); btn.click(); changed = true; }
       }
