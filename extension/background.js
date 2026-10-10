@@ -52,7 +52,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     const readToken = message.action === 'load' ? JobScreenChannel.readerToken(ownerId, Number(message.tabId)) : null;
     if (message.action === 'close-worker') {
       JobScreenChannel.cancelReaders(ownerId, Number(message.tabId));
-      JobScreenAccessBackground.finish(ownerId, Number(message.tabId));
+      await JobScreenAccessBackground.finish(ownerId, Number(message.tabId));
       const data = await chrome.storage.session.get(null), keys = [];
       for (const [key, owned] of Object.entries(data)) if (key.startsWith('jobWorker:') && (owned.ownerTabId === ownerId || key === 'jobWorker:' + ownerId) && (!message.tabId || owned.sourceTabId === Number(message.tabId))) { await chrome.tabs.remove(owned.tabId).catch(() => {}); keys.push(key); }
       await chrome.storage.session.remove(keys); return true;

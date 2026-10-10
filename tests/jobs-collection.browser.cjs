@@ -63,7 +63,7 @@ let context,server,passed=0;const pass=s=>{passed++;console.log('PASS '+s);};
   pass('point-and-select rules stay local and the picker can close');
   const denied=await page.evaluate(async url=>chrome.runtime.sendMessage({type:'job-screen',action:'load',tabId:Number(new URL(location.href).searchParams.get('tab')),nonce:new URL(location.href).searchParams.get('nonce'),url}),'https://example.invalid/job?id=1');
   assert.equal(denied.ok,false);assert.match(denied.error,/当前网站/);
-  await source.goto('about:blank');await page.locator('#collect').click();await page.locator('#status').filter({hasText:'已切换网站'}).waitFor();
+  await source.goto('about:blank');await page.locator('#restart').click();await page.locator('#status').filter({hasText:'已切换网站'}).waitFor();
   pass('unauthorized cross-site details and changed source origins are rejected');
   await source.goto(base+'/expand');await page.reload();await page.locator('#source-label').filter({hasText:'127.0.0.1'}).waitFor();
   const metadata=await page.evaluate(async()=>chrome.storage.session.get(null));

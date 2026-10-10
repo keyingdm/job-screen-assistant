@@ -1,17 +1,26 @@
 (function (root) {
   'use strict';
   if (root.JobScreenWidget) return;
-  let binding, current = {}, host, panel, list, message, count, search, degree, hideDegree, speed, start, pause, resume, clear, authorize;
+  let binding, current = {}, host, panel, list, message, count, search, degree, hideDegree, speed, start, pause, resume, restart, clear, authorize;
+  let pollTimer, polling = false, epochFloor = 0;
   let renderedRows = new Map(), listSignature = '';
   const el = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
   async function send(action, extra = {}) {
     try {
-      const response = await chrome.runtime.sendMessage({ type: 'job-widget', action, tabId: binding.tabId, nonce: binding.nonce, ...extra });
+      const requested = { ...binding };
+      const pending = chrome.runtime.sendMessage({ type: 'job-widget', action, tabId: requested.tabId, nonce: requested.nonce, ...extra });
+      let timer;
+      const response = await (action === 'snapshot' ? Promise.race([pending, new Promise((_, reject) => { timer = setTimeout(() => reject(Error('状态同步超时，正在重连；已有结果保留。')), 6000); })]).finally(() => clearTimeout(timer)) : pending);
+      if (binding.nonce !== requested.nonce) return;
       if (!response?.ok) throw Error(response?.error || '插件连接已断开，请重新点击工具栏图标');
       if (response.result?.jobs) render(response.result);
       return response.result;
-    } catch (e) { message.textContent = e.message; }
+    } catch (e) {
+      if (action === 'snapshot') render({ ...current, busy: false, connectionLost: true, message: '状态连接中断，正在重连；已有结果保留。' });
+      else message.textContent = e.message;
+    }
   }
+  async function poll() { if (polling || !host?.isConnected || host.style.display === 'none') return; polling = true; try { await send('snapshot'); } finally { polling = false; } }
   function button(label, action, fn) { const b = el('button', label); b.dataset.action = action; b.type = 'button'; b.onclick = fn || (() => send(action)); return b; }
   function build() {
     renderedRows = new Map(); listSignature = '';
@@ -31,15 +40,20 @@
     const pace = el('label', '采集速度'); speed = el('select'); speed.setAttribute('aria-label', '采集速度');
     for (const [value, text] of [['steady', '稳妥 · 3 秒间隔（默认）'], ['fast', '较快 · 2 秒间隔']]) { const option = el('option', text); option.value = value; speed.append(option); } pace.append(speed); speed.onchange = () => send('speed', { speed: speed.value }); panel.append(pace, el('p', '采集中先暂停再改速度；同站按较慢设置共用间隔。较快模式可能更易限流，遇到限制仍立即停止。', 'note'));
     const actions = el('div', undefined, 'actions'); start = button('开始检索', 'start'); start.className = 'primary'; pause = button('暂停', 'pause'); resume = button('继续', 'resume');
-    clear = button('结束并清空', 'clear'); clear.className = 'danger'; const full = button('打开总筛选台 ↗', 'focus'); authorize = button('授权详情站点 ↗', 'focus'); authorize.hidden = true; actions.append(start, pause, resume, authorize, full, clear); panel.append(actions);
+    resume.textContent = '继续本次采集'; resume.className = 'primary'; restart = button('重新开始并清空进度', 'restart'); restart.title = '清空本轮进度，从原招聘页当前所在页开始';
+    clear = button('结束并清空', 'clear'); clear.className = 'danger'; const full = button('打开总筛选台 ↗', 'focus'); authorize = button('授权详情站点 ↗', 'focus'); authorize.hidden = true; actions.append(start, pause, resume, restart, authorize, full, clear); panel.append(actions);
     count = el('p', '尚未开始', 'count'); message = el('p', '当前网站独立检索，专业与其他条件可在总台设置。', 'status'); message.setAttribute('role', 'status'); list = el('ol');
     panel.append(count, message, list, el('p', '× 只收起小窗；请保持总筛选台打开。收藏长期保存，其他结果仅属于本轮会话。', 'note'));
     shadow.append(style, panel); document.documentElement.append(host);
   }
   function render(state) {
-    if (!panel) return; current = state || {};
+    if (!panel) return;
+    if (state?.epoch && (state.epoch < epochFloor || state.epoch < (current.epoch || 0) || state.epoch === current.epoch && state.revision < current.revision)) return;
+    if (state?.ended) epochFloor = Math.max(epochFloor, (current.epoch || 0) + 1);
+    current = state || {};
     count.textContent = '已发现 ' + (current.total || 0) + ' · 筛选后 ' + (current.count || 0) + ' · 已读详情 ' + (current.read || 0);
-    message.textContent = current.message || '尚未开始'; start.disabled = Boolean(current.busy || current.clearing); pause.hidden = !current.busy; resume.hidden = current.busy || !current.resumable; clear.disabled = !current.total && !current.busy;
+    message.textContent = current.message || '尚未开始'; start.disabled = Boolean(current.busy || current.clearing || current.hasProgress || current.connectionLost); start.hidden = Boolean(current.resumable); pause.hidden = !current.busy; resume.hidden = current.busy || !current.resumable; resume.disabled = Boolean(current.connectionLost); clear.disabled = !current.total && !current.busy;
+    restart.hidden = !current.hasProgress; restart.disabled = Boolean(current.busy || current.clearing || current.connectionLost);
     authorize.hidden = !current.needsPermission; degree.value = current.degree || ''; hideDegree.checked = Boolean(current.hideDegreeConflicts); speed.value = current.speed === 'fast' ? 'fast' : 'steady'; speed.disabled = Boolean(current.busy || current.clearing);
     if (document.activeElement !== host && search.value !== (current.query || '')) search.value = current.query || '';
     const signature = JSON.stringify([current.total || 0, current.count || 0, current.jobs || []]);
@@ -61,8 +75,8 @@
     else children.push(el('li', '已显示当前筛选的全部 ' + current.count + ' 条结果，可在小窗内滚动查看。', 'note'));
     list.replaceChildren(...children); renderedRows = nextRows;
   }
-  function show(data) { binding = data; if (!host?.isConnected) build(); host.style.display = 'block'; panel.querySelector('#source').textContent = new URL(data.url).hostname + ' · 仅控制当前网站'; render(current); }
-  function hide() { if (host) host.style.display = 'none'; }
+  function show(data) { if (binding && binding.nonce !== data.nonce) { current = {}; epochFloor = 0; } binding = data; if (!host?.isConnected) build(); host.style.display = 'block'; panel.querySelector('#source').textContent = new URL(data.url).hostname + ' · 仅控制当前网站'; render(current); clearInterval(pollTimer); pollTimer = setInterval(poll, 4000); poll(); }
+  function hide() { if (host) host.style.display = 'none'; clearInterval(pollTimer); }
   chrome.runtime.onMessage.addListener((value, sender) => { if (sender.id === chrome.runtime.id && value?.type === 'job-widget-state' && value.nonce === binding?.nonce) render(value.state); });
   root.JobScreenWidget = { show, hide };
 })(globalThis);

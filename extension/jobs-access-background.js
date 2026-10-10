@@ -4,6 +4,20 @@ globalThis.JobScreenAccessBackground = (() => {
   const A = JobScreenAccess, runs = new Map(), budgets = new Map(), tabs = new Map(), recent = new Map(), blocks = new Map(), writes = new Map();
   const governor = new A.Governor({ intervalFor: (run, origin) => Math.max(run.intervalMs, ...[...runs.values()].filter(r => r.active && !r.stop && r.origins.has(origin)).map(r => r.intervalMs)) });
   const key = (owner, source) => owner + ':' + source;
+  const runKey = k => 'jobAccessRun:' + k;
+  const runWrites = new Map(), gateReads = new Map();
+  function saveRun(run) {
+    const k = key(run.owner, run.source), value = { origin: run.origin, count: run.count };
+    const write = (runWrites.get(k) || Promise.resolve()).catch(() => {}).then(() => chrome.storage.session.set({ [runKey(k)]: value }));
+    runWrites.set(k, write); return write;
+  }
+  async function restoreGate(origin) {
+    if (!gateReads.has(origin)) gateReads.set(origin, (async () => {
+      const k = 'jobAccessGate:' + origin, saved = (await chrome.storage.session.get(k))[k];
+      if (!governor.pools.has(origin)) governor.pools.set(origin, { last: Number.isFinite(saved?.last) ? saved.last : null, intervalMs: saved?.intervalMs || 0, queue: Promise.resolve() });
+    })());
+    await gateReads.get(origin);
+  }
   const blockKey = origin => 'jobAccessBlock:' + origin;
   async function block(origin, stop) {
     if (['cancelled','limit','permission'].includes(stop.kind)) return;
@@ -26,15 +40,28 @@ globalThis.JobScreenAccessBackground = (() => {
   }
   async function begin(owner, source, origin, resume = false, speed = 'steady') {
     const saved = await blocked(origin); if (saved) throw A.error(saved);
-    finish(owner, source);
+    await finish(owner, source);
     const k = key(owner, source);
+    await runWrites.get(k);
+    if (resume && !budgets.has(k)) {
+      const savedRun = (await chrome.storage.session.get(runKey(k)))[runKey(k)];
+      if (savedRun?.origin === origin && Number.isInteger(savedRun.count) && savedRun.count >= 0) budgets.set(k, savedRun.count);
+    }
     if (resume && !budgets.has(k)) throw A.error(A.record('cancelled', '本轮访问连接已结束，请手动重新开始。'));
     const run = { owner, source, origin, origins: new Set([origin]), ticket: crypto.randomUUID(), active: true, speed: A.speed(speed), intervalMs: A.speeds[A.speed(speed)], count: resume ? budgets.get(k) : 0 }; budgets.set(k, run.count);
-    runs.set(key(owner, source), run); tabs.set(source, run); return { ticket: run.ticket, policy: A.policy, speed: run.speed };
+    runs.set(key(owner, source), run); tabs.set(source, run); await saveRun(run); return { ticket: run.ticket, policy: A.policy, speed: run.speed };
   }
-  function finish(owner, source) {
-    for (const [k, run] of runs) if (run.owner === owner && (!source || run.source === source)) { run.active = false; budgets.set(k, run.count); runs.delete(k); for (const [id, mapped] of tabs) if (mapped === run) tabs.delete(id); }
-    if (!source) for (const k of budgets.keys()) if (k.startsWith(owner + ':')) budgets.delete(k);
+  function finish(owner, source, preserve = false) {
+    const pending = [];
+    for (const [k, run] of runs) if (run.owner === owner && (!source || run.source === source)) { run.active = false; budgets.set(k, run.count); pending.push(saveRun(run)); runs.delete(k); for (const [id, mapped] of tabs) if (mapped === run) tabs.delete(id); }
+    if (!source && !preserve) {
+      for (const k of budgets.keys()) if (k.startsWith(owner + ':')) budgets.delete(k);
+      return Promise.all(pending).then(async () => {
+        const saved = await chrome.storage.session.get(null);
+        await chrome.storage.session.remove(Object.keys(saved).filter(k => k.startsWith(runKey(owner + ':'))));
+      });
+    }
+    return Promise.all(pending);
   }
   function current(owner, source, ticket) {
     const run = runs.get(key(owner, source));
@@ -50,7 +77,10 @@ globalThis.JobScreenAccessBackground = (() => {
   }
   async function permit(owner, source, ticket, url) {
     const run = current(owner, source, ticket), origin = await target(run.origin, url), saved = await blocked(origin); if (saved) { run.stop = saved; throw A.error(saved); }
-    run.origins.add(origin); await governor.permit(run, origin); return true;
+    run.origins.add(origin); await restoreGate(origin); await governor.permit(run, origin);
+    const pool = governor.pools.get(origin);
+    await chrome.storage.session.set({ ['jobAccessGate:' + origin]: { last: pool.last, intervalMs: pool.intervalMs } });
+    await saveRun(run); return true;
   }
   async function attach(owner, source, ticket, tabId, origin) {
     const run = current(owner, source, ticket); tabs.set(tabId, run);

@@ -66,15 +66,15 @@ globalThis.JobScreenChannel = (() => {
     const snapshot = await request(saved, 'snapshot', binding);
     await chrome.tabs.sendMessage(tab.id, { type: 'job-widget-state', nonce: binding.nonce, state: snapshot }).catch(() => {});
   }
-  async function cleanup(owner) {
+  async function cleanup(owner, preserve = false) {
     cancelReaders(owner);
-    globalThis.JobScreenAccessBackground?.finish(owner);
+    await globalThis.JobScreenAccessBackground?.finish(owner, null, preserve);
     const data = await chrome.storage.session.get(null), keys = [];
     for (const [key, value] of Object.entries(data)) {
       if (key.startsWith('jobWorker:') && (value.ownerTabId === owner || key === 'jobWorker:' + owner)) { await chrome.tabs.remove(value.tabId).catch(() => {}); keys.push(key); }
       if (key.startsWith('jobOwner:' + owner + ':')) {
         const sourceTabId = Number(key.split(':')[2]);
-        await chrome.tabs.sendMessage(sourceTabId, { type: 'job-widget-state', nonce: value, state: { busy: false, message: '总筛选台已关闭或刷新，本轮未收藏结果已清空。', jobs: [], count: 0, ended: true } }).catch(() => {}); keys.push(key);
+        if (!preserve) { await chrome.tabs.sendMessage(sourceTabId, { type: 'job-widget-state', nonce: value, state: { busy: false, message: '总筛选台已关闭或刷新，本轮未收藏结果已清空。', jobs: [], count: 0, ended: true } }).catch(() => {}); keys.push(key); }
       }
     }
     await chrome.storage.session.remove(keys);
@@ -88,7 +88,7 @@ globalThis.JobScreenChannel = (() => {
       if (reply?.port === port) { clearTimeout(reply.timer); pending.delete(message.id); message.error ? reply.reject(Error(message.error)) : reply.resolve(message.result); }
       if (message.type === 'states' && Array.isArray(message.states)) for (const item of message.states.slice(0, 30)) {
         chrome.storage.session.get(ownerKey(owner, item.tabId)).then(data => {
-          if (data[ownerKey(owner, item.tabId)] === item.nonce) return chrome.tabs.sendMessage(item.tabId, { type: 'job-widget-state', nonce: item.nonce, state: item.state }).catch(() => {});
+          if (ports.get(owner) === port && data[ownerKey(owner, item.tabId)] === item.nonce) return chrome.tabs.sendMessage(item.tabId, { type: 'job-widget-state', nonce: item.nonce, state: item.state }).catch(() => {});
         });
       }
     });
@@ -96,7 +96,8 @@ globalThis.JobScreenChannel = (() => {
       if (ports.get(owner) !== port) return;
       ports.delete(owner);
       for (const [id, item] of pending) if (item.port === port) { clearTimeout(item.timer); item.reject(Error('总筛选台连接已重置')); pending.delete(id); }
-      const clean = cleanup(owner).catch(() => {}).finally(() => { if (closing.get(owner) === clean) closing.delete(owner); }); closing.set(owner, clean);
+      // A port disconnect can be temporary. Only actual hub closure clears jobs.
+      const clean = cleanup(owner, true).catch(() => {}).finally(() => { if (closing.get(owner) === clean) closing.delete(owner); }); closing.set(owner, clean);
     });
   });
   chrome.runtime.onMessage.addListener((message, sender, respond) => {
@@ -108,13 +109,21 @@ globalThis.JobScreenChannel = (() => {
       }
       const tabId = Number(message.tabId), binding = (await chrome.storage.session.get('jobBinding:' + tabId))['jobBinding:' + tabId];
       if (sender.id !== chrome.runtime.id || sender.tab?.id !== tabId || !binding || binding.nonce !== message.nonce || new URL(sender.url).origin !== binding.origin) throw Error('小窗与当前网站未绑定');
-      if (!['snapshot', 'start', 'resume', 'pause', 'clear', 'focus', 'detail', 'favorite', 'search', 'degree', 'speed', 'hide'].includes(message.action)) throw Error('小窗操作无效');
+      if (!['snapshot', 'start', 'resume', 'restart', 'pause', 'clear', 'focus', 'detail', 'favorite', 'search', 'degree', 'speed', 'hide'].includes(message.action)) throw Error('小窗操作无效');
       if (message.action === 'speed' && !Object.hasOwn(JobScreenAccess.speeds, message.speed)) throw Error('采集速度无效');
       if (message.action === 'degree' && !['','专科','本科','硕士','博士'].includes(message.degree)) throw Error('学历设置无效');
       if (message.action === 'hide') { await chrome.storage.session.set({ ['jobWidget:' + tabId]: false }); return true; }
       const metadata = { tabId, nonce: binding.nonce, url: sender.tab.url, title: sender.tab.title || '' };
+      if (message.action === 'snapshot') {
+        // Polling must never reopen a closed hub or start another collection.
+        const owner = (await chrome.storage.session.get('jobHubTab')).jobHubTab;
+        const tab = owner && await chrome.tabs.get(owner).catch(() => null);
+        if (!tab?.url?.startsWith(chrome.runtime.getURL('jobs.html'))) return { busy: false, jobs: [], total: 0, count: 0, ended: true, message: '总筛选台已关闭，本轮未收藏结果已清空。' };
+        await authorize(owner, tabId, binding.nonce);
+        return request(owner, 'snapshot', metadata);
+      }
       const page = await hub(metadata, false);
-      if (['start', 'resume'].includes(message.action) && !await chrome.permissions.contains({ origins: [binding.origin + '/*'] })) {
+      if (['start', 'resume', 'restart'].includes(message.action) && !await chrome.permissions.contains({ origins: [binding.origin + '/*'] })) {
         await chrome.tabs.update(page.id, { active: true }); throw Error('请在总台点击开始采集，允许读取当前网站后再使用小窗');
       }
       if (['focus', 'detail'].includes(message.action)) await chrome.tabs.update(page.id, { active: true });

@@ -3,6 +3,9 @@
   const J = typeof module !== 'undefined' ? require('./jobs-core.js') : root.JobScreen;
   const C = typeof module !== 'undefined' ? require('./jobs-collector.js') : root.JobScreenCollector;
   const A = typeof module !== 'undefined' ? require('./jobs-access.js') : root.JobScreenAccess;
+  const canResume = task => Boolean(task?.tabId && task.dataset && !task.busy && !task.starting && !task.startPromise && !task.clearing &&
+    !['blocked','limited','permission'].includes(task.dataset.stage) &&
+    (task.dataset.stage !== 'done' || task.dataset.jobs.some(j => j.collectionState === 'failed')));
   class Tasks {
     constructor(change = () => {}) { this.items = new Map(); this.change = change; }
     add(binding) {
@@ -19,7 +22,8 @@
       if (!resume || !task.dataset) task.dataset = C.session(task.source.url);
       else {
         for (const job of task.dataset.jobs) if (job.collectionState === 'failed') job.collectionState = 'pending';
-        if (task.dataset.stage === 'permission') { delete task.dataset.accessStop; task.dataset.stopReason = ''; task.dataset.stage = task.dataset.listEnded ? 'details' : 'list'; }
+        delete task.dataset.accessStop; task.dataset.stopReason = '';
+        task.dataset.stage = task.dataset.detailsPending || task.dataset.listEnded ? 'details' : 'list';
       }
       task.controller = new AbortController(); task.busy = true; task.message = '正在采集当前网站'; this.change(task);
       const execute = async () => {
@@ -27,9 +31,9 @@
           await C.collect({ ...options, session: task.dataset, signal: task.controller.signal, onUpdate: data => {
             if (task.generation === generation) { task.dataset = data; this.change(task); }
           } });
-          if (task.generation === generation) task.message = task.dataset.stage === 'limited' ? task.dataset.stopReason : '本次采集结束。请核对原文并收藏需要保留的岗位。';
+          if (task.generation === generation) task.message = ['limited','interrupted'].includes(task.dataset.stage) ? task.dataset.stopReason : task.dataset.jobs.some(j => j.collectionState === 'failed') ? '本次列表采集结束，部分详情读取失败。点击继续可重试失败详情，已读岗位保留。' : '本次采集结束。请核对原文并收藏需要保留的岗位。';
         } catch (error) {
-          if (task.generation === generation) task.message = A.read(error)?.reason || (task.controller?.signal.aborted ? '已暂停，可继续本次任务。' : error.message);
+          if (task.generation === generation) task.message = (A.read(error)?.reason || (task.controller?.signal.aborted ? '已暂停' : error.message)) + (['paused','interrupted','stopped'].includes(task.dataset.stage) ? ' 本轮进度保留；原招聘页仍可访问时，点击继续本次采集。' : '');
         } finally {
           await options.cleanup?.().catch(() => {});
           if (task.generation === generation) { task.busy = false; task.controller = null; task.promise = null; this.change(task); }
@@ -54,9 +58,9 @@
       if (selected.length === 1) return { ...selected[0].dataset, jobs: this.jobs(selected[0]) };
       const totalKnown = selected.every(t => Number.isInteger(t.dataset.total));
       return { source: 'merged', jobs: selected.flatMap(t => this.jobs(t)), total: totalKnown ? selected.reduce((n, t) => n + t.dataset.total, 0) : null,
-        pages: selected.reduce((n, t) => n + (t.dataset.pages || 0), 0), complete: selected.every(t => t.dataset.complete), stage: selected.some(t => t.busy) ? 'running' : 'done', sourceCount: selected.length };
+        pages: selected.reduce((n, t) => n + (t.dataset.pages || 0), 0), complete: selected.every(t => t.dataset.complete), stage: selected.some(t => t.busy) ? 'running' : selected.some(t => t.dataset.stage !== 'done') ? 'interrupted' : 'done', sourceCount: selected.length };
     }
   }
-  root.JobScreenTasks = { Tasks };
+  root.JobScreenTasks = { Tasks, canResume };
   if (typeof module !== 'undefined') module.exports = root.JobScreenTasks;
 })(globalThis);

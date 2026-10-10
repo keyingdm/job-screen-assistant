@@ -69,11 +69,16 @@ async function completed(){await until(async()=>!(await hub.locator('#collect').
   for(const kind of ['403','429','captcha','dynamic403','xhr429','list403']){
     const fixture=await site(kind);await bind(fixture.base);await hub.locator('#collect-speed').selectOption(kind==='429'?'fast':'steady');await hub.locator('#collect').click();
     await hub.locator('#status').filter({hasText:kind==='captcha'?'验证':kind==='403'||kind==='dynamic403'||kind==='list403'?'403':'429'}).waitFor();await completed();
-    assert.equal(fixture.traffic.filter(r=>r.path==='/detail'&&r.id==='3').length,0,kind+' must not visit job 3');
-    if(kind==='list403')assert.equal(fixture.traffic.filter(r=>r.path==='/detail').length,0);
-    else assert.equal(fixture.traffic.filter(r=>r.path==='/detail'&&r.id==='1').length,1);
+    if(kind==='list403'){
+      const refusal=fixture.traffic.findIndex(r=>r.path==='/more');assert.ok(refusal>=0);
+      assert.deepEqual(fixture.traffic.slice(0,refusal).filter(r=>r.path==='/detail').map(r=>r.id),['1','2','3']);
+      assert.equal(fixture.traffic.slice(refusal+1).some(r=>r.path==='/detail'),false,'no further details after the pagination refusal');
+    }else{
+      assert.equal(fixture.traffic.filter(r=>r.path==='/detail'&&r.id==='3').length,0,kind+' must not visit job 3');
+      assert.equal(fixture.traffic.filter(r=>r.path==='/detail'&&r.id==='1').length,1);
+    }
     if(kind==='403'||kind==='429'||kind==='captcha')assert.equal(fixture.traffic.filter(r=>r.path==='/detail'&&r.id==='2').length,1,'no dynamic fallback after refusal');
-    const prior=fixture.traffic.length;await hub.locator('#collect').click();await completed();await hub.waitForTimeout(250);assert.equal(fixture.traffic.length,prior,'cooldown prevents manual retry requests');
+    const prior=fixture.traffic.length;await hub.locator('#restart').click();await completed();await hub.waitForTimeout(250);assert.equal(fixture.traffic.length,prior,'cooldown prevents manual retry requests');
     const block=await worker.evaluate(async origin=>(await chrome.storage.session.get('jobAccessBlock:'+origin))['jobAccessBlock:'+origin],fixture.base);
     assert.ok(block.until>Date.now()+500000);if(kind==='429'||kind==='xhr429')assert.ok(block.until>Date.now()+1700000);
     assert.equal(await hub.locator('.job-row').count(),3);

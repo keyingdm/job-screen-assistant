@@ -99,14 +99,14 @@ async function until(check,timeout=25000){const end=Date.now()+timeout;while(Dat
   pass('navigating the active source tab to another website stops further reads and removes its detail reader');
   await b.goto(bases[1]+'/list');await worker.evaluate(async id=>JobScreenChannel.showMini(await chrome.tabs.get(id)),ids[1]);
   const oldTask=await hub.locator('#task-source').inputValue();
-  await widget(b,'[data-action=start]','click');await until(async()=>Object.keys(await worker.evaluate(()=>chrome.storage.session.get(null))).some(k=>k.startsWith('jobWorker:')));
+  await widget(b,'[data-action=restart]','click');await until(async()=>Object.keys(await worker.evaluate(()=>chrome.storage.session.get(null))).some(k=>k.startsWith('jobWorker:')));
   await b.goto(bases[0]+'/list');await worker.evaluate(async id=>JobScreenChannel.showMini(await chrome.tabs.get(id)),ids[1]);await widget(b,'[data-action=start]','click');
   await until(async()=>Object.keys(await worker.evaluate(()=>chrome.storage.session.get(null))).some(k=>k.startsWith('jobWorker:')));
   await hub.locator('#task-source').selectOption(oldTask);await hub.locator('#end-task').click();
   await until(async()=>/已读详情 2/.test(await widget(b,'.count')));assert.match(await widget(b,'section'),/虚构A1工程师/);
   assert.ok(await hub.locator('#task-source option').filter({hasText:'已离开'}).count()>0);
   pass('quickly starting a new site in the same tab and clearing the old task cannot cancel the new reader');
-  await widget(b,'[data-action=start]','click');await until(async()=>Object.keys(await worker.evaluate(()=>chrome.storage.session.get(null))).some(k=>k.startsWith('jobWorker:')));
+  await widget(b,'[data-action=restart]','click');await until(async()=>Object.keys(await worker.evaluate(()=>chrome.storage.session.get(null))).some(k=>k.startsWith('jobWorker:')));
   const closing=hub.waitForEvent('close');await hub.locator('#app-close').click();await closing;
   await until(async()=>!Object.keys(await worker.evaluate(()=>chrome.storage.session.get(null))).some(k=>k.startsWith('jobWorker:')));
   assert.equal(a.isClosed(),false);assert.equal(b.isClosed(),false);assert.deepEqual(errors,[]);

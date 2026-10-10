@@ -7,6 +7,8 @@
   let profile = await Store.get('jobProfile', {}), favorites = await Store.migrate(), filters = {}, dataset = null, rows = [], page = 1;
   let mode = 'favorites', view = await Store.get('jobView', 'table'), busy = false, source = null, rule = {}, ruleKey = '', selectedTask = 'all', port = null, closing = false;
   const tasks = new JobScreenTasks.Tasks(() => repaint());
+  const canResume = JobScreenTasks.canResume;
+  const hubEpoch = Date.now(); let stateRevision = 0;
   const activeTask = () => tasks.items.get(selectedTask);
   let profileSave = Promise.resolve(), renderTimer = null;
   const repaint = () => { if (!closing && renderTimer === null) renderTimer = setTimeout(() => { renderTimer = null; render(); }, 70); };
@@ -193,11 +195,15 @@
   }
   function setBusy(value) {
     const task = activeTask();
-    $('collect').disabled = value || !task?.tabId || task.clearing;
+    const resumable = canResume(task);
+    $('collect').disabled = value || Boolean(task?.starting || task?.startPromise) || !task?.tabId || task.clearing || Boolean(task.dataset && !resumable);
+    $('collect').hidden = resumable;
+    $('restart').hidden = !task?.dataset;
+    $('restart').disabled = value || Boolean(task?.starting || task?.startPromise || task?.clearing) || !task?.tabId;
     $('sample').disabled = [...tasks.items.values()].some(t => t.busy);
     for (const el of document.querySelectorAll('.pick,#clear-rule')) el.disabled = value || !task?.tabId;
     $('pause').hidden = !value; $('collect').textContent = value ? '采集中…' : '开始采集当前列表';
-    $('resume').hidden = value || !task?.dataset || ['done','blocked','limited','permission','stopped'].includes(task.dataset.stage) || task.id === 'sample';
+    $('resume').hidden = !resumable;
     const permission = task?.dataset?.stage === 'permission' && task.dataset.accessStop?.origin;
     $('detail-permission').hidden = !permission; $('authorize-details').disabled = Boolean(value);
     $('detail-permission-note').textContent = permission ? '岗位详情位于 ' + permission + '。授权后只读取岗位详情，沿用本轮进度和访问间隔。' : '';
@@ -216,7 +222,7 @@
     $('source-label').textContent = activeTask() ? '当前来源：' + activeTask().label + ' · 沿用原网页当前筛选条件' : tasks.items.size ? '合并查看本轮来源；各网站分别点击小窗启动。' : '在招聘网页点击工具栏图标，打开该网站的小窗。';
     $('task-list').replaceChildren(...[...tasks.items.values()].map(t => {
       const row = node('div', 'task-item'), pick = node('button', 'subtle', t.label); pick.onclick = () => selectSource(t.id);
-      row.append(pick, node('span', 'hint', (t.busy ? '采集中' : ['blocked','limited'].includes(t.dataset?.stage) ? '保护已停止' : t.dataset?.stage === 'stopped' ? '已停止' : t.dataset?.stage === 'permission' ? '详情待授权' : t.dataset?.stage === 'done' ? '已结束' : t.dataset ? '已暂停' : '尚未开始') + ' · ' + (t.dataset?.jobs.length || 0) + ' 个岗位')); return row;
+      row.append(pick, node('span', 'hint', (t.busy ? (t.dataset?.phase === 'details' ? '读取详情与专业要求' : '发现岗位与翻页') : ['blocked','limited'].includes(t.dataset?.stage) ? '保护已停止' : t.dataset?.stage === 'stopped' ? '已停止，可核对后继续' : t.dataset?.stage === 'interrupted' ? '中断，可继续' : t.dataset?.stage === 'permission' ? '详情待授权' : t.dataset?.stage === 'done' ? '已结束' : t.dataset ? '已暂停，可继续' : '尚未开始') + ' · ' + (t.dataset?.jobs.length || 0) + ' 个岗位')); return row;
     }));
   }
   function setSpeed(task, value) {
@@ -244,8 +250,8 @@
   }
   function widgetSnapshot(task) {
     const jobs = tasks.jobs(task), values = J.filter(jobs, profile, filters, marks(jobs)), d = task.dataset;
-    return { busy: Boolean(task.busy || task.starting), speed: JobScreenAccess.speed(task.speed), clearing: Boolean(task.clearing), resumable: Boolean(d && !['done','blocked','limited','permission','stopped'].includes(d.stage)), needsPermission: d?.stage === 'permission', degree: profile.degree || '', hideDegreeConflicts: Boolean(filters.hideDegreeConflicts), total: jobs.length, count: values.length,
-      read: jobs.filter(j => j.collectionState === 'read').length, message: task.message, query: filters.major || '',
+    return { epoch: hubEpoch, revision: ++stateRevision, hasProgress: Boolean(d), busy: Boolean(task.busy || task.starting || task.startPromise), speed: JobScreenAccess.speed(task.speed), clearing: Boolean(task.clearing), resumable: canResume(task), needsPermission: d?.stage === 'permission', degree: profile.degree || '', hideDegreeConflicts: Boolean(filters.hideDegreeConflicts), total: jobs.length, count: values.length,
+      read: jobs.filter(j => j.collectionState === 'read').length, message: task.busy ? (d?.phase === 'details' ? '正在读取本页岗位详情和专业要求；读完本页后继续翻页。' : '正在发现岗位和翻页；本页读取后立即识别专业要求。') : task.message, query: filters.major || '',
       jobs: values.map(({ job, match }) => { const major = professionalData(job); return { key: job.key, name: job.name, company: job.company, city: job.city, url: job.url, linkKind: job.linkKind, degreeLabel: job.facts.degree.label, judgement: judgementLabel(match), conflictReason: match.conflictReason, majorLabel: major.label, majorMissing: major.missing, majorPrimary: major.primary, favorite: Boolean(favorites[keyFor(job)]) }; }) };
   }
   function publishWidgets() {
@@ -261,10 +267,12 @@
     };
     if (navigator.locks) await navigator.locks.request('job-screen-favorites', write); else await write();
   }
-  function startTask(task, resume = false) {
-    if (!task || task.busy || task.starting || task.clearing) return Promise.resolve();
+  function startTask(task, resume = false, restart = false) {
+    if (!task || task.busy || task.starting || task.startPromise || task.clearing) return Promise.resolve();
+    // Existing progress is only replaced through the explicit restart/clear action.
+    if (!resume && task.dataset && !restart) { if (!canResume(task)) return Promise.resolve(); resume = true; }
     const pending = runStartTask(task, resume); task.startPromise = pending;
-    return pending.finally(() => { if (task.startPromise === pending) task.startPromise = null; });
+    return pending.finally(() => { if (task.startPromise === pending) { task.startPromise = null; repaint(); } });
   }
   async function runStartTask(task, resume = false) {
     if (!task || task.busy || task.starting || task.clearing) return;
@@ -284,24 +292,29 @@
     } catch (e) { task.message = JobScreenAccess.read(e)?.reason || e.message; }
     finally { if (task.startToken === token) { task.starting = false; task.startToken = null; } if (selectedTask === task.id) status(task.message); render(); }
   }
-  async function requestAndStart(resume) {
+  async function requestAndStart(resume, restart = false) {
     const task = activeTask(); if (!task?.tabId) { status('请在各网站的小窗分别开始，或先选择一个来源。'); return; }
-    try { const granted = await chrome.permissions.request({ origins: [new URL(task.source.url).origin + '/*'] }); if (granted) { mode = 'session'; await startTask(task, resume); } else status('未获得当前网站权限，可以继续查看收藏。'); }
+    try { const granted = await chrome.permissions.request({ origins: [new URL(task.source.url).origin + '/*'] }); if (granted) { mode = 'session'; await startTask(task, resume, restart); } else status('未获得当前网站权限，可以继续查看收藏。'); }
     catch (e) { status(e.message); }
   }
   async function clearTask(task) {
+    const starting = task.startPromise;
     task.startToken = null; task.starting = false;
     const pending = tasks.clear(task); if (task.tabId) await rpc('close-worker', {}, task).catch(() => {}); await pending;
+    await starting;
     render(); if (selectedTask === task.id) status(task.message);
   }
   async function handleHub(action, binding) {
     let task = tasks.items.get(String(binding.tabId) + ':' + binding.nonce);
-    if (action === 'bind' || !task) task = await bindSource(binding);
+    const absent = !task;
+    if (action === 'bind' || absent) task = await bindSource(binding);
+    if (action === 'snapshot' && absent) task.message = '总台已重新打开，本轮未收藏结果已清空；请主动开始新任务。';
     if (action === 'bind' || action === 'snapshot') return widgetSnapshot(task);
     if (action === 'search') { filters.major = binding.query; restore(); controls(); page = 1; render(); }
     if (action === 'degree') { profile.degree = binding.degree; filters.hideDegreeConflicts = binding.hideDegreeConflicts; restore(); controls(); page = 1; render(); const value = {...profile}; profileSave = profileSave.then(() => Store.set('jobProfile', value)).catch(e => status('个人条件保存失败：' + e.message)); }
     if (action === 'speed') setSpeed(task, binding.speed);
-    if (['focus', 'detail', 'start', 'resume'].includes(action)) selectSource(task.id);
+    if (['focus', 'detail', 'start', 'resume', 'restart'].includes(action)) selectSource(task.id);
+    if (action === 'restart') { if (task.busy || task.starting || task.startPromise || task.clearing) throw Error('请先暂停，再重新开始。'); startTask(task, false, true); }
     if (action === 'start' || action === 'resume') startTask(task, action === 'resume');
     if (action === 'pause') { tasks.pause(task); rpc('close-worker', {}, task).catch(() => {}); }
     if (action === 'clear') await clearTask(task);
@@ -324,12 +337,28 @@
       if (!message.id || !message.action) return;
       handleHub(message.action, message.data || {}).then(result => connected.postMessage({ id: message.id, result })).catch(e => { try { connected.postMessage({ id: message.id, error: e.message }); } catch {} });
     });
-    connected.onDisconnect.addListener(() => { if (port === connected) { port = null; if (!closing) setTimeout(connectHub, 500); } });
+    connected.onDisconnect.addListener(() => {
+      if (port !== connected) return;
+      port = null;
+      if (!closing) {
+        const error = Error('插件控制连接中断');
+        for (const task of tasks.items.values()) {
+          if (task.busy || task.starting) {
+            task.startToken = null; task.starting = false;
+            task.controller?.abort(error);
+            task.message = '插件控制连接中断，本轮进度保留。连接恢复后点击继续本次采集。';
+            if (task.dataset) { task.dataset.stage = 'interrupted'; task.dataset.stopReason = task.message; task.dataset.complete = false; }
+          }
+        }
+        repaint(); setTimeout(connectHub, 500);
+      }
+    });
     for (const task of tasks.items.values()) if (task.tabId) chrome.runtime.sendMessage({ type: 'job-hub-control', action: 'register', tabId: task.tabId, nonce: task.nonce }).catch(() => {});
     publishWidgets();
   }
   const heartbeat = setInterval(() => { try { port?.postMessage({ type: 'ping' }); } catch {} }, 20000);
   $('collect').onclick = () => requestAndStart(false); $('resume').onclick = () => requestAndStart(true);
+  $('restart').onclick = () => requestAndStart(false, true);
   $('authorize-details').onclick = async () => {
     const task = activeTask(), origin = task?.dataset?.accessStop?.origin; if (!origin || task.busy) return;
     try { const granted = await chrome.permissions.request({origins:[origin + '/*']}); if (granted) await startTask(task, true); else status('未授权详情站点，已有结果保留，可打开岗位原页核对。'); } catch(e) { status('详情站点授权失败：' + e.message); }

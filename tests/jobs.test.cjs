@@ -150,6 +150,27 @@ test('generic collector follows observed pages and reports scoped counts', async
   assert.equal(d.jobs.length,3); assert.equal(d.pages,2); assert.equal(d.complete,true); assert.ok(updates.includes(2));
   assert.equal(d.sourceURL,'https://example.test/list?city=武汉');
 });
+test('a failure after 220 jobs retains recognized majors and resumes without rereading details',async()=>{
+  const T=require('../extension/jobs-tasks.js'),tasks=new T.Tasks(),task=tasks.add({tabId:1,nonce:'checkpoint',url:'https://example.test/list'});
+  let p=1,fail=true;const reads=new Map();
+  const batch=()=>listing(Array.from({length:20},(_,i)=>String((p-1)*20+i)),p<20,{total:400,pageNumber:p,jobs:Array.from({length:20},(_,i)=>raw(String((p-1)*20+i),{requirements:'',collectionState:'pending'}))});
+  const opt={read:async()=>batch(),next:async()=>{if(p===11&&fail){fail=false;throw Error('模拟翻页加载超时');}p++;return batch();},readDetail:async url=>{reads.set(url,(reads.get(url)||0)+1);return {requirements:'本科及以上，电子信息类相关专业。'};},delay:0};
+  await tasks.run(task,opt);assert.equal(task.busy,false);assert.equal(task.dataset.stage,'interrupted');assert.equal(task.dataset.jobs.length,220);assert.equal(task.dataset.jobs.filter(j=>j.collectionState==='read').length,220);
+  assert.equal(T.canResume(task),true);assert.equal(task.dataset.jobs.every(j=>J.matchMajor(j,'电子信息').hit),true);assert.match(task.message,/进度保留.*继续/);
+  await tasks.run(task,opt,true);assert.equal(task.dataset.jobs.length,400);assert.equal(task.dataset.pages,20);assert.equal(task.dataset.complete,true);assert.equal(reads.size,400);assert.equal([...reads.values()].every(n=>n===1),true);
+});
+test('a pause inside per-page details resumes those details before advancing',async()=>{
+  const d=C.session('https://example.test/list'),controller=new AbortController(),calls=[];let interrupted=true;
+  const opt=options(d,{read:async()=>listing(['1','2'],true,{jobs:['1','2'].map(id=>raw(id,{requirements:'',collectionState:'pending'}))}),next:async()=>{calls.push('next');return listing(['3'],false,{pageNumber:2,jobs:[raw('3',{requirements:'',collectionState:'pending'})]});},readDetail:async url=>{const id=url.split('=').at(-1);calls.push(id);if(id==='2'&&interrupted){interrupted=false;controller.abort();throw controller.signal.reason;}return {requirements:'本科；专业不限。'};}});
+  await assert.rejects(C.collect({...opt,signal:controller.signal}),{name:'AbortError'});assert.equal(d.detailsPending,true);assert.equal(d.stage,'paused');assert.equal(d.pages,1);assert.equal(d.advanceNeeded,true);assert.deepEqual(calls,['1','2']);
+  await C.collect(opt);assert.deepEqual(calls,['1','2','2','next','3']);assert.equal(d.jobs.length,3);assert.equal(d.complete,true);
+});
+test('resume eligibility includes ordinary and connection interruptions but excludes ended sources and protection stops',()=>{
+  const {canResume}=require('../extension/jobs-tasks.js');const t={tabId:1,dataset:{stage:'interrupted',jobs:[]}};
+  for(const stage of ['interrupted','paused','stopped','list','details']){t.dataset.stage=stage;assert.equal(canResume(t),true);}
+  for(const stage of ['blocked','limited','permission','done']){t.dataset.stage=stage;assert.equal(canResume(t),false);}
+  t.dataset.jobs=[{collectionState:'failed'}];assert.equal(canResume(t),true);t.tabId=null;assert.equal(canResume(t),false);
+});
 test('unknown or incomplete total never claims full coverage', async () => {
   const d=C.session('https://example.test/list');
   await C.collect(options(d,{read:async()=>listing(['1'],false,{total:null})}));
@@ -162,6 +183,7 @@ test('repeated pages stop discovery without claiming full coverage', async () =>
   const d=C.session('https://example.test/list');
   await C.collect(options(d,{next:async()=>listing(['1','2'],true)}));assert.match(d.stopReason,/没有变化/);
   assert.equal(d.jobs.length,2); assert.equal(d.complete,false);
+  const reported=C.session(d.sourceURL);await C.collect(options(reported,{read:async()=>listing(['1','2'],true,{total:2}),next:async()=>listing(['1','2'],true,{total:2})}));assert.equal(reported.complete,false);assert.equal(reported.stage,'interrupted');
 });
 test('pause resumes the same in-memory page without losing items', async () => {
   const d=C.session('https://example.test/list'), controller=new AbortController();
@@ -366,6 +388,16 @@ test('background resume retains the operation budget and overlapping refusals ne
   const longer=Date.now()+3600000;await Promise.all([background.block(origin,A.record('rate','较长冷却',429,longer)),background.block(origin,A.record('refused','稍后拒绝',403))]);
   assert.ok(saved['jobAccessBlock:'+origin].until>=longer);await assert.rejects(background.begin(1,2,origin),e=>A.read(e)?.until>=longer);
   background.finish(1);await assert.rejects(background.begin(1,3,'https://new.invalid',true),e=>A.read(e)?.kind==='cancelled');
+});
+test('a recreated worker restores operation count and the previous pacing gap without storing job records',async()=>{
+  const vm=require('node:vm'),fs=require('node:fs'),saved={};let time=10000;const waits=[];
+  class ClockGovernor extends A.Governor{constructor(opts){super({...opts,now:()=>time,wait:async ms=>{waits.push(ms);time+=ms;}});}}
+  const create=()=>{const ctx=vm.createContext({JobScreenAccess:{...A,Governor:ClockGovernor},JobScreenChannel:{accessStop(){}},crypto:require('node:crypto').webcrypto,URL,setTimeout,
+    chrome:{permissions:{contains:async()=>false},storage:{session:{get:async k=>k===null?{...saved}:{[k]:saved[k]},set:async values=>Object.assign(saved,values),remove:async keys=>{for(const k of Array.isArray(keys)?keys:[keys])delete saved[k];}}},webRequest:{onHeadersReceived:{addListener(){}}},runtime:{onMessage:{addListener(){}}},tabs:{onRemoved:{addListener(){}}}}});
+    vm.runInContext(fs.readFileSync(require.resolve('../extension/jobs-access-background.js'),'utf8'),ctx);return ctx.JobScreenAccessBackground;};
+  const first=create(),origin='https://example.test',run=await first.begin(1,2,origin,false,'steady');await first.permit(1,2,run.ticket);await first.finish(1,null,true);
+  const restarted=create(),continued=await restarted.begin(1,2,origin,true,'fast');assert.equal(restarted.current(1,2,continued.ticket).count,1);await restarted.permit(1,2,continued.ticket);assert.deepEqual(waits,[3000]);assert.equal(restarted.current(1,2,continued.ticket).count,2);
+  assert.deepEqual(Object.keys(saved['jobAccessRun:1:2']).sort(),['count','origin']);await restarted.finish(1);assert.equal(saved['jobAccessRun:1:2'],undefined);await assert.rejects(create().begin(1,2,origin,true),e=>A.read(e)?.kind==='cancelled');
 });
 test('refusal and captcha failures stop the whole collector without reading later jobs',async()=>{
   for(const kind of ['refused','rate','captcha']){

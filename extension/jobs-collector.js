@@ -11,8 +11,44 @@
     const d = session, map = new Map(d.jobs.map(j => [j.key, j])), identities = new Set(d.identities || d.jobs.map(j => j.id)), signatures = new Set(d.signatures);
     let lastPublish = 0;
     const publish = () => { d.jobs = [...map.values()]; d.identities = [...identities]; d.updatedAt = new Date().toISOString(); lastPublish = Date.now(); onUpdate(d); };
+    let interrupted = false;
+    const details = async () => {
+      d.stage = 'details'; d.phase = 'details'; publish();
+      for (const job of map.values()) {
+        signal?.throwIfAborted();
+        if (['read', 'missing', 'failed'].includes(job.collectionState)) continue;
+        if (job.linkKind !== 'detail') { job.collectionState = 'missing'; job.collectionError = '未识别独立详情链接；当前只读到列表内容。'; publish(); continue; }
+        job.collectionState = 'reading'; publish();
+        try {
+          const raw = await readDetail(job.url, signal); signal?.throwIfAborted();
+          const complete = raw.requirements && raw.completeness !== 'detail-summary';
+          const detailDegree = JobScreen.degreeInfo(raw.requirements || '');
+          const inheritedDegree = raw.requirements && !detailDegree.rank && !detailDegree.unrestricted && job.facts.degree.evidence;
+          const requirements = (raw.requirements || job.requirements) + (inheritedDegree ? '\n学历要求（来源列表）：' + inheritedDegree : '');
+          const enriched = JobScreen.normalize({ ...job, ...raw, id: job.id, url: job.url,
+            name: job.name || raw.name, company: job.company || raw.company, city: job.city || raw.city,
+            majorRequirements: raw.majorRequirements || (raw.requirements && JobScreen.majors.extract(raw).known ? '' : job.majorRequirements),
+            requirements, completeness: complete ? 'detail' : 'detail-missing',
+            collectionState: complete ? 'read' : 'missing', collectionError: complete ? '' : '详情已读取，但未找到完整的任职要求；摘要不代表详情已读完整。' }, 'page');
+          map.set(job.key, enriched);
+        } catch (error) {
+          if (signal?.aborted) { job.collectionState = 'pending'; publish(); throw error; }
+          job.collectionState = 'failed'; job.collectionError = error.message;
+          if (A.read(error)) { if (['permission','cancelled'].includes(A.read(error).kind)) job.collectionState = 'pending'; publish(); throw error; }
+        }
+        publish(); await sleep(delay, signal);
+      }
+      d.detailsPending = false;
+    };
+    const interruptList = reason => {
+      interrupted = true; d.complete = false; d.currentPage = null; d.pageOffset = 0;
+      d.advanceNeeded = true; d.advanceInFlight = false; d.stopReason = reason;
+    };
     try { while (!d.listEnded) {
       signal?.throwIfAborted();
+      // Finish this page's details before advancing, including after an interruption.
+      if (d.detailsPending) await details();
+      d.stage = 'list'; d.phase = 'list';
       let page = d.currentPage;
       if (!page && d.advanceNeeded) {
         // A pause can occur after browser navigation but before its result arrives.
@@ -29,10 +65,10 @@
       if (!page.jobs.length && page.total === 0 && !page.next) { d.total = 0; d.currentPage = null; d.listEnded = true; publish(); break; }
       if (!page.jobs.length) {
         if (!d.pages) throw Error('没有识别到岗位。请先指定岗位区域或标题，再重新采集。');
-        d.listEnded = true; d.currentPage = null; d.stopReason = '当前分页未识别到岗位，已停止继续翻页；已发现岗位仍会读取详情。'; publish(); break;
+        interruptList('当前分页未识别到岗位，本轮进度保留。请核对原页，点击继续本次采集重试。'); publish(); break;
       }
       const signature = page.signature || page.jobs.map(j => j.id).join('|');
-      if (signatures.has(signature)) { d.listEnded = true; d.currentPage = null; d.stopReason = '翻页后岗位没有变化，已停止继续翻页；已发现岗位仍会读取详情。可以核对下一页按钮。'; publish(); break; }
+      if (signatures.has(signature)) { interruptList('翻页后岗位没有变化，本轮进度保留。请核对下一页按钮，点击继续本次采集重试。'); publish(); break; }
       if (Number.isInteger(page.total) && page.total >= 0) d.total = page.total;
       if (d.pages === 0 && page.pageNumber && page.pageNumber > 1) d.startedMidList = true;
       const resumedPage = Boolean(d.pageOffset); let additions = 0;
@@ -50,41 +86,29 @@
         if (additions % 50 === 0) await sleep(0, signal);
       }
       signatures.add(signature); d.signatures.push(signature); d.pages++; d.currentPage = null; d.pageOffset = 0;
-      publish();
-      if (d.discoveryLimited) break;
-      if (!additions && !resumedPage && d.pages > 1) { d.listEnded = true; d.advanceNeeded = false; d.stopReason = '翻页后没有新增岗位，已停止继续翻页；已发现岗位仍会读取详情。'; break; }
+      if (!additions && !resumedPage && d.pages > 1) { interruptList('翻页后没有新增岗位，本轮进度保留。请核对下一页按钮，点击继续本次采集重试。'); publish(); break; }
       d.advanceNeeded = Boolean(page.next); d.listEnded = !page.next;
       if (!d.listEnded && (d.pages >= maxPages || map.size >= maxJobs)) { d.discoveryLimited = true; d.listEnded = true; d.advanceNeeded = false; d.stopReason = '达到本轮岗位或分页上限，已停止发现更多岗位；本轮结果仍可筛选和收藏。'; }
+      // Commit navigation state before reading details so a pause cannot skip a page.
+      d.detailsPending = true; publish(); await details();
+      if (d.discoveryLimited) break;
       if (!d.listEnded) await sleep(delay, signal);
     }
-    d.stage = 'details'; publish();
-    for (const job of map.values()) {
-      signal?.throwIfAborted();
-      if (job.collectionState === 'read' || job.collectionState === 'missing') continue;
-      if (job.linkKind !== 'detail') { job.collectionState = 'missing'; job.collectionError = '未识别独立详情链接；当前只读到列表内容。'; publish(); continue; }
-      job.collectionState = 'reading'; publish();
-      try {
-        const raw = await readDetail(job.url, signal); signal?.throwIfAborted();
-        const complete = raw.requirements && raw.completeness !== 'detail-summary';
-        const detailDegree = JobScreen.degreeInfo(raw.requirements || '');
-        const inheritedDegree = raw.requirements && !detailDegree.rank && !detailDegree.unrestricted && job.facts.degree.evidence;
-        const requirements = (raw.requirements || job.requirements) + (inheritedDegree ? '\n学历要求（来源列表）：' + inheritedDegree : '');
-        const enriched = JobScreen.normalize({ ...job, ...raw, id: job.id, url: job.url,
-          name: job.name || raw.name, company: job.company || raw.company, city: job.city || raw.city,
-          majorRequirements: raw.majorRequirements || (raw.requirements && JobScreen.majors.extract(raw).known ? '' : job.majorRequirements),
-          requirements, completeness: complete ? 'detail' : 'detail-missing',
-          collectionState: complete ? 'read' : 'missing', collectionError: complete ? '' : '详情已读取，但未找到完整的任职要求；摘要不代表详情已读完整。' }, 'page');
-        map.set(job.key, enriched);
-      } catch (error) {
-        if (signal?.aborted) { job.collectionState = 'pending'; publish(); throw error; }
-        job.collectionState = 'failed'; job.collectionError = error.message;
-        if (A.read(error)) { if (A.read(error).kind === 'permission') job.collectionState = 'pending'; publish(); throw error; }
-      }
-      publish(); await sleep(delay, signal);
+    await details();
+    d.complete = !interrupted && !d.discoveryLimited && !d.startedMidList && Number.isInteger(d.total) && map.size === d.total;
+    if (!d.discoveryLimited && !interrupted && Number.isInteger(d.total) && map.size < d.total) {
+      interruptList('页面报告 ' + d.total + ' 个岗位，本轮仅发现 ' + map.size + ' 个，尚未采集完整。请核对下一页按钮后继续。'); d.listEnded = false;
     }
-    d.complete = !d.discoveryLimited && !d.startedMidList && Number.isInteger(d.total) && map.size === d.total;
-    d.stage = d.discoveryLimited ? 'limited' : 'done'; publish(); return d;
-    } catch (e) { publish(); if (signal?.aborted && !A.read(signal.reason)) throw signal.reason || e; const stop = A.read(signal?.reason) || A.read(e); if (stop) { d.accessStop = stop; d.stage = stop.kind === 'limit' ? 'limited' : stop.kind === 'permission' ? 'permission' : stop.kind === 'cancelled' ? 'stopped' : 'blocked'; d.stopReason = stop.reason; d.complete = false; publish(); } throw e; }
+    d.stage = d.discoveryLimited ? 'limited' : interrupted ? 'interrupted' : 'done'; publish(); return d;
+    } catch (e) {
+      const stop = A.read(signal?.reason) || (!signal?.aborted && A.read(e));
+      d.complete = false;
+      if (stop) { d.accessStop = stop; d.stage = stop.kind === 'limit' ? 'limited' : stop.kind === 'permission' ? 'permission' : stop.kind === 'cancelled' ? 'stopped' : 'blocked'; d.stopReason = stop.reason; }
+      else { d.stage = signal?.aborted ? 'paused' : 'interrupted'; d.stopReason = signal?.aborted ? '已暂停，本轮进度保留。' : e.message; }
+      // An empty/unrecognized first read must be re-read after the user corrects it.
+      if (!d.currentPage?.jobs.length) d.currentPage = null;
+      publish(); throw signal?.aborted ? signal.reason || e : e;
+    }
   }
   const session = url => ({ source: 'page', sourceURL: url, jobs: [], total: null, pages: 0, signatures: [], listEnded: false,
     advanceNeeded: false, complete: false, stage: 'list', updatedAt: new Date().toISOString() });

@@ -1,11 +1,11 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>岗位筛选助手</title><link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="jobs.css"></head>
 <body class="jobs-app">
-<header><div class="brand-icon" aria-hidden="true">⌘</div><div><h1>岗位筛选助手 <span class="badge">0.1.2</span></h1><p>把岗位放在一起，把选择留给自己。</p></div><a href="help.html" target="_blank" rel="noopener">使用指南 ↗</a><button id="app-close" class="icon-button" aria-label="关闭筛选台" title="关闭筛选台">×</button></header>
+<header><div class="brand-icon" aria-hidden="true">⌘</div><div><h1>岗位筛选助手 <span class="badge">0.1.3</span></h1><p>把岗位放在一起，把选择留给自己。</p></div><a href="help.html" target="_blank" rel="noopener">使用指南 ↗</a><button id="app-close" class="icon-button" aria-label="关闭筛选台" title="关闭筛选台">×</button></header>
 <main>
 <section class="collection-box" aria-label="岗位采集">
 <div class="hero-copy"><span class="eyebrow">你的求职工作台</span><h2>从一整页岗位，到你的投递清单。</h2><p>普通结果只在本次筛选中保留。收藏后，岗位资料和链接才会保存到本机。</p></div>
-<div class="collection-controls"><p id="source-label" class="source-label">先打开招聘列表，再点击浏览器工具栏的插件图标。</p><div class="toolbar"><button id="collect" class="primary">开始采集当前列表</button><button id="resume" class="secondary" hidden>继续本次采集</button><button id="pause" class="secondary" hidden>暂停</button><button id="sample" class="subtle">体验虚构示例</button></div><p class="hint">沿用原网页的公司、城市等条件，从当前页读取后续分页。采集时原页会自动翻页，请在这里操作。</p></div>
+<div class="collection-controls"><p id="source-label" class="source-label">先打开招聘列表，再点击浏览器工具栏的插件图标。</p><div class="toolbar"><button id="collect" class="primary">开始采集当前列表</button><button id="resume" class="primary" hidden>继续本次采集</button><button id="restart" class="secondary" hidden title="清除本轮未收藏进度，从原招聘页当前所在页重新采集">重新开始并清空进度</button><button id="pause" class="secondary" hidden>暂停</button><button id="sample" class="subtle">体验虚构示例</button></div><p class="hint">沿用原网页的公司、城市等条件，从当前页读取后续分页，每页随即读取详情和专业要求。中断后点击继续保留进度；重新开始会清空进度，并从原页当前所在页开始。</p></div>
 <progress id="progress" value="0" max="1" aria-label="岗位收集进度"></progress><p id="coverage">下次打开只显示收藏；未收藏的岗位不自动保存。</p><p id="status" role="status" aria-live="polite"></p>
 <div class="access-note"><label class="speed-control">当前来源采集速度<select id="collect-speed" aria-describedby="speed-note"><option value="steady">稳妥 · 3 秒间隔（默认）</option><option value="fast">较快 · 2 秒间隔</option></select></label><p id="speed-note" class="hint">先选择一个来源设置速度；采集中需暂停后修改。同站多个任务按较慢设置共用间隔。</p><p class="hint">不设固定数量上限；列表结束或无新增时停止。较快模式可能更容易触发网站限流；遇到访问限制立即停止，已有结果保留，不会自动重试。</p></div>
 <div id="detail-permission" class="access-note" hidden><p id="detail-permission-note"></p><button id="authorize-details" class="primary">授权详情站点并继续</button></div>
