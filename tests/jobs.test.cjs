@@ -307,6 +307,22 @@ test('same-origin runs share the gate while other origins can proceed independen
   assert.deepEqual(waits,[3000,3000]);assert.equal(time,6000);assert.equal(first.count,2);assert.equal(second.count,1);
   const other={origin:'https://two.invalid',active:true,count:0};await g.permit(other);assert.equal(time,6000);
 });
+test('speed modes default to steady and only offer bounded two-second acceleration',()=>{
+  assert.equal(A.speed(undefined),'steady');assert.equal(A.speed('invalid'),'steady');assert.equal(A.speed('fast'),'fast');
+  assert.deepEqual(A.speeds,{steady:3000,fast:2000});
+});
+test('speed transitions respect both the previous and next operation intervals',async()=>{
+  let time=0;const waits=[],g=new A.Governor({now:()=>time,wait:async ms=>{waits.push(ms);time+=ms;},intervalFor:r=>r.intervalMs});
+  const run={origin:'https://pace.invalid',active:true,count:0,intervalMs:A.speeds.fast};
+  await g.permit(run);await g.permit(run);run.intervalMs=A.speeds.steady;await g.permit(run);
+  run.intervalMs=A.speeds.fast;await g.permit(run);await g.permit(run);
+  assert.deepEqual(waits,[2000,3000,3000,2000]);
+});
+test('a slower task joining during a queued wait extends the shared interval',async()=>{
+  let time=0,interval=2000;const waits=[],g=new A.Governor({now:()=>time,intervalFor:()=>interval,wait:async ms=>{waits.push(ms);time+=ms;interval=3000;}});
+  const run={origin:'https://pace.invalid',active:true,count:0};await g.permit(run);await g.permit(run);
+  assert.deepEqual(waits,[2000,1000]);assert.equal(time,3000);
+});
 test('cancelling a queued operation prevents its later execution and count increment',async()=>{
   let time=0;const run={origin:'https://one.invalid',active:true,count:0},g=new A.Governor({now:()=>time,wait:async ms=>{time+=ms;run.active=false;}});
   await g.permit(run);await assert.rejects(g.permit(run),e=>A.read(e)?.kind==='cancelled');assert.equal(run.count,1);

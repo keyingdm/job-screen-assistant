@@ -108,7 +108,8 @@ globalThis.JobScreenChannel = (() => {
       }
       const tabId = Number(message.tabId), binding = (await chrome.storage.session.get('jobBinding:' + tabId))['jobBinding:' + tabId];
       if (sender.id !== chrome.runtime.id || sender.tab?.id !== tabId || !binding || binding.nonce !== message.nonce || new URL(sender.url).origin !== binding.origin) throw Error('小窗与当前网站未绑定');
-      if (!['snapshot', 'start', 'resume', 'pause', 'clear', 'focus', 'detail', 'favorite', 'search', 'degree', 'hide'].includes(message.action)) throw Error('小窗操作无效');
+      if (!['snapshot', 'start', 'resume', 'pause', 'clear', 'focus', 'detail', 'favorite', 'search', 'degree', 'speed', 'hide'].includes(message.action)) throw Error('小窗操作无效');
+      if (message.action === 'speed' && !Object.hasOwn(JobScreenAccess.speeds, message.speed)) throw Error('采集速度无效');
       if (message.action === 'degree' && !['','专科','本科','硕士','博士'].includes(message.degree)) throw Error('学历设置无效');
       if (message.action === 'hide') { await chrome.storage.session.set({ ['jobWidget:' + tabId]: false }); return true; }
       const metadata = { tabId, nonce: binding.nonce, url: sender.tab.url, title: sender.tab.title || '' };
@@ -117,7 +118,7 @@ globalThis.JobScreenChannel = (() => {
         await chrome.tabs.update(page.id, { active: true }); throw Error('请在总台点击开始采集，允许读取当前网站后再使用小窗');
       }
       if (['focus', 'detail'].includes(message.action)) await chrome.tabs.update(page.id, { active: true });
-      return request(page.id, message.action, { ...metadata, key: String(message.key || '').slice(0, 3000), query: String(message.query || '').slice(0, 300), degree: message.degree || '', hideDegreeConflicts: Boolean(message.hideDegreeConflicts) });
+      return request(page.id, message.action, { ...metadata, key: String(message.key || '').slice(0, 3000), query: String(message.query || '').slice(0, 300), degree: message.degree || '', hideDegreeConflicts: Boolean(message.hideDegreeConflicts), speed: JobScreenAccess.speed(message.speed) });
     })().then(result => respond({ ok: true, result })).catch(error => respond({ ok: false, error: error.message })); return true;
   });
   chrome.tabs.onUpdated.addListener((tabId, change, tab) => {

@@ -64,7 +64,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (!/^https?:\/\//.test(tab.url || '') || new URL(tab.url).origin !== binding.origin) throw JobScreenAccess.error(JobScreenAccess.record('cancelled', '原标签页已切换网站，任务已停止；请在新页面重新打开插件'));
     accessOrigin = binding.origin;
     if (message.action === 'context') return { url: tab.url, title: tab.title };
-    if (message.action === 'access-begin') return JobScreenAccessBackground.begin(ownerId, tabId, binding.origin, Boolean(message.resume));
+    if (message.action === 'access-begin') return JobScreenAccessBackground.begin(ownerId, tabId, binding.origin, Boolean(message.resume), message.speed);
     if (message.action === 'access-permit') { accessOrigin = await JobScreenAccessBackground.target(binding.origin, message.url); return JobScreenAccessBackground.permit(ownerId, tabId, message.ticket, message.url); }
     if (message.action === 'access-report') { accessOrigin = await JobScreenAccessBackground.target(binding.origin, message.url); if (!['rate', 'refused', 'captcha'].includes(message.stop?.kind)) throw Error('访问限制类型无效'); throw JobScreenAccess.error(message.stop); }
     if (message.action === 'load') accessOrigin = await JobScreenAccessBackground.target(binding.origin, message.url);

@@ -1,7 +1,8 @@
 'use strict';
 // Counts controlled operations only. Never records response bodies or browsing history.
 globalThis.JobScreenAccessBackground = (() => {
-  const A = JobScreenAccess, governor = new A.Governor(), runs = new Map(), budgets = new Map(), tabs = new Map(), recent = new Map(), blocks = new Map(), writes = new Map();
+  const A = JobScreenAccess, runs = new Map(), budgets = new Map(), tabs = new Map(), recent = new Map(), blocks = new Map(), writes = new Map();
+  const governor = new A.Governor({ intervalFor: (run, origin) => Math.max(run.intervalMs, ...[...runs.values()].filter(r => r.active && !r.stop && r.origins.has(origin)).map(r => r.intervalMs)) });
   const key = (owner, source) => owner + ':' + source;
   const blockKey = origin => 'jobAccessBlock:' + origin;
   async function block(origin, stop) {
@@ -23,13 +24,13 @@ globalThis.JobScreenAccessBackground = (() => {
     if (value?.until > Date.now()) return value;
     blocks.delete(origin); if (saved) await chrome.storage.session.remove(k); return null;
   }
-  async function begin(owner, source, origin, resume = false) {
+  async function begin(owner, source, origin, resume = false, speed = 'steady') {
     const saved = await blocked(origin); if (saved) throw A.error(saved);
     finish(owner, source);
     const k = key(owner, source);
     if (resume && !budgets.has(k)) throw A.error(A.record('cancelled', '本轮访问连接已结束，请手动重新开始。'));
-    const run = { owner, source, origin, origins: new Set([origin]), ticket: crypto.randomUUID(), active: true, count: resume ? budgets.get(k) : 0 }; budgets.set(k, run.count);
-    runs.set(key(owner, source), run); tabs.set(source, run); return { ticket: run.ticket, policy: A.policy };
+    const run = { owner, source, origin, origins: new Set([origin]), ticket: crypto.randomUUID(), active: true, speed: A.speed(speed), intervalMs: A.speeds[A.speed(speed)], count: resume ? budgets.get(k) : 0 }; budgets.set(k, run.count);
+    runs.set(key(owner, source), run); tabs.set(source, run); return { ticket: run.ticket, policy: A.policy, speed: run.speed };
   }
   function finish(owner, source) {
     for (const [k, run] of runs) if (run.owner === owner && (!source || run.source === source)) { run.active = false; budgets.set(k, run.count); runs.delete(k); for (const [id, mapped] of tabs) if (mapped === run) tabs.delete(id); }

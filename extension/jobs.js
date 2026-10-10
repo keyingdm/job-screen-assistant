@@ -204,6 +204,9 @@
     $('end-task').disabled = selectedTask === 'all' ? ![...tasks.items.values()].some(t => t.busy || t.dataset) : !task?.busy && !task?.dataset;
   }
   function renderTasks() {
+    const task = activeTask(), speed = JobScreenAccess.speed(task?.speed);
+    $('collect-speed').value = speed; $('collect-speed').disabled = !task?.tabId || Boolean(task.busy || task.starting || task.clearing);
+    $('speed-note').textContent = !task?.tabId ? '选择一个网站来源后可设置速度，各来源默认使用稳妥模式。' : (speed === 'fast' ? '较快模式：同站自动操作至少间隔 2 秒。' : '稳妥模式：同站自动操作至少间隔 3 秒。') + ' 采集中需暂停后修改；同站多个任务按较慢设置共用间隔。详情完整性检查保持不变。';
     const select = $('task-source'), signature = [...tasks.items.values()].map(t => t.id).join('|');
     if (select.dataset.signature !== signature) {
       select.dataset.signature = signature; const all = node('option', '', '合并所有本轮来源'); all.value = 'all';
@@ -215,6 +218,11 @@
       const row = node('div', 'task-item'), pick = node('button', 'subtle', t.label); pick.onclick = () => selectSource(t.id);
       row.append(pick, node('span', 'hint', (t.busy ? '采集中' : ['blocked','limited'].includes(t.dataset?.stage) ? '保护已停止' : t.dataset?.stage === 'stopped' ? '已停止' : t.dataset?.stage === 'permission' ? '详情待授权' : t.dataset?.stage === 'done' ? '已结束' : t.dataset ? '已暂停' : '尚未开始') + ' · ' + (t.dataset?.jobs.length || 0) + ' 个岗位')); return row;
     }));
+  }
+  function setSpeed(task, value) {
+    if (!task?.tabId) throw Error('请先选择一个网站来源。');
+    if (task.busy || task.starting || task.clearing) throw Error('请先暂停采集，再修改速度。');
+    task.speed = JobScreenAccess.speed(value); render();
   }
   function selectSource(id) { selectedTask = id; mode = 'session'; page = 1; render(); status(activeTask()?.message || '正在合并查看本轮来源；结束并清空将作用于全部本轮任务。'); }
   async function bindSource(binding) {
@@ -236,7 +244,7 @@
   }
   function widgetSnapshot(task) {
     const jobs = tasks.jobs(task), values = J.filter(jobs, profile, filters, marks(jobs)), d = task.dataset;
-    return { busy: Boolean(task.busy || task.starting), clearing: Boolean(task.clearing), resumable: Boolean(d && !['done','blocked','limited','permission','stopped'].includes(d.stage)), needsPermission: d?.stage === 'permission', degree: profile.degree || '', hideDegreeConflicts: Boolean(filters.hideDegreeConflicts), total: jobs.length, count: values.length,
+    return { busy: Boolean(task.busy || task.starting), speed: JobScreenAccess.speed(task.speed), clearing: Boolean(task.clearing), resumable: Boolean(d && !['done','blocked','limited','permission','stopped'].includes(d.stage)), needsPermission: d?.stage === 'permission', degree: profile.degree || '', hideDegreeConflicts: Boolean(filters.hideDegreeConflicts), total: jobs.length, count: values.length,
       read: jobs.filter(j => j.collectionState === 'read').length, message: task.message, query: filters.major || '',
       jobs: values.map(({ job, match }) => { const major = professionalData(job); return { key: job.key, name: job.name, company: job.company, city: job.city, url: job.url, linkKind: job.linkKind, degreeLabel: job.facts.degree.label, judgement: judgementLabel(match), conflictReason: match.conflictReason, majorLabel: major.label, majorMissing: major.missing, majorPrimary: major.primary, favorite: Boolean(favorites[keyFor(job)]) }; }) };
   }
@@ -267,7 +275,7 @@
       if (task.startToken !== token) return;
       if (!resume) { task.source = context; task.ruleKey = origin + new URL(context.url).pathname; task.rule = (await Store.get('jobRules', {}))[task.ruleKey] || {}; }
       if (task.startToken !== token) return;
-      const access = await rpc('access-begin', { resume }, task); task.ticket = access.ticket;
+      const access = await rpc('access-begin', { resume, speed: task.speed }, task); task.ticket = access.ticket;
       if (task.startToken !== token) { await rpc('close-worker', {}, task).catch(() => {}); return; }
       await tasks.run(task, { read: () => rpc('scan', { rule: task.rule, expand: true }, task), next: () => rpc('advance', { rule: task.rule }, task),
         resolveLink: selector => rpc('resolve', { selector }, task), readDetail: (url, signal) => readDetail(url, signal, task),
@@ -292,6 +300,7 @@
     if (action === 'bind' || action === 'snapshot') return widgetSnapshot(task);
     if (action === 'search') { filters.major = binding.query; restore(); controls(); page = 1; render(); }
     if (action === 'degree') { profile.degree = binding.degree; filters.hideDegreeConflicts = binding.hideDegreeConflicts; restore(); controls(); page = 1; render(); const value = {...profile}; profileSave = profileSave.then(() => Store.set('jobProfile', value)).catch(e => status('个人条件保存失败：' + e.message)); }
+    if (action === 'speed') setSpeed(task, binding.speed);
     if (['focus', 'detail', 'start', 'resume'].includes(action)) selectSource(task.id);
     if (action === 'start' || action === 'resume') startTask(task, action === 'resume');
     if (action === 'pause') { tasks.pause(task); rpc('close-worker', {}, task).catch(() => {}); }
@@ -327,6 +336,7 @@
   };
   $('pause').onclick = () => { const t = activeTask(); tasks.pause(t); if (t?.tabId) rpc('close-worker', {}, t).catch(() => {}); };
   $('task-source').onchange = () => selectSource($('task-source').value);
+  $('collect-speed').onchange = () => setSpeed(activeTask(), $('collect-speed').value);
   $('end-task').onclick = async () => {
     const selected = selectedTask === 'all' ? [...tasks.items.values()] : [activeTask()].filter(Boolean);
     await Promise.all(selected.map(clearTask)); status(selectedTask === 'all' ? '全部本轮任务已结束，未收藏结果已清空。' : '当前任务已结束，未收藏结果已清空。');

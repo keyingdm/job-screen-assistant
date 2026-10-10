@@ -11,7 +11,7 @@
       const url = J.safeURL(binding.url), label = url ? new URL(url).hostname : '虚构示例';
       if (!url && id !== 'sample') throw Error('来源网址无效');
       const task = { ...binding, id, source: { url, title: J.text(binding.title) }, label, dataset: null, busy: false, generation: 0, controller: null, promise: null, message: '尚未开始', rule: {}, ruleKey: url ? new URL(url).origin + new URL(url).pathname : '' };
-      this.items.set(id, task); this.change(task); return task;
+      task.speed = 'steady'; this.items.set(id, task); this.change(task); return task;
     }
     async run(task, options, resume = false) {
       if (task.busy || task.clearing) return;

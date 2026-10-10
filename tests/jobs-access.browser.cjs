@@ -50,8 +50,24 @@ async function completed(){await until(async()=>!(await hub.locator('#collect').
   const times=rate.traffic.filter(r=>r.path==='/detail').map(r=>r.at);assert.ok(times.slice(1).every((t,i)=>t-times[i]>=2800),JSON.stringify(times));
   pass('real production pacing serializes two same-origin tabs at least three seconds per controlled operation');
   assert.equal(await hub.locator('.job-row').count(),2);pass('an unrelated tab refusal does not stop the active source tasks');
+  const fast=await site('rate');await bind(fast.base);await hub.locator('#collect-speed').selectOption('fast');await hub.locator('#collect').click();
+  assert.equal(await hub.locator('#collect-speed').isDisabled(),true);
+  await until(()=>fast.traffic.filter(r=>r.path==='/detail').length===2);await completed();
+  const fastTimes=fast.traffic.filter(r=>r.path==='/detail').map(r=>r.at),fastGap=fastTimes[1]-fastTimes[0];
+  assert.ok(fastGap>=1800&&fastGap<2800,'two-second mode actual gap: '+fastGap);pass('optional fast mode uses two-second production pacing and locks settings during collection');
+  const mixed=await site('rate'),first=await bind(mixed.base,'?tab=1');await hub.locator('#collect-speed').selectOption('fast');
+  const firstValue=await hub.locator('#task-source').inputValue();await bind(mixed.base,'?tab=2');assert.equal(await hub.locator('#collect-speed').inputValue(),'steady');const secondValue=await hub.locator('#task-source').inputValue();
+  await hub.locator('#task-source').selectOption(firstValue);await hub.locator('#collect').click();await hub.locator('#task-source').selectOption(secondValue);await hub.locator('#collect').click();
+  await until(()=>mixed.traffic.filter(r=>r.path==='/detail').length===4);await completed();
+  const mixedTimes=mixed.traffic.filter(r=>r.path==='/detail').map(r=>r.at);assert.ok(mixedTimes.slice(1).every((t,i)=>t-mixedTimes[i]>=2800),JSON.stringify(mixedTimes));
+  pass('mixed fast and steady tasks share the slower real-origin pacing while each source retains its own setting');
+  const paused=await site('pause');await bind(paused.base);await hub.locator('#collect').click();await until(async()=>/要求完整 1/.test(await hub.locator('#coverage').textContent()));
+  await hub.locator('#pause').click();await completed();assert.equal(await hub.locator('#collect-speed').isDisabled(),false);await hub.locator('#collect-speed').selectOption('fast');await hub.locator('#resume').click();
+  await until(()=>paused.traffic.filter(r=>r.path==='/detail').length===3);await completed();
+  assert.equal(paused.traffic.filter(r=>r.path==='/detail'&&r.id==='1').length,1);assert.equal(await hub.locator('.job-row').count(),3);assert.equal(await hub.locator('#collect-speed').inputValue(),'fast');
+  pass('pause then change speed resumes progress without rereading finished details or losing rows');
   for(const kind of ['403','429','captcha','dynamic403','xhr429','list403']){
-    const fixture=await site(kind);await bind(fixture.base);await hub.locator('#collect').click();
+    const fixture=await site(kind);await bind(fixture.base);await hub.locator('#collect-speed').selectOption(kind==='429'?'fast':'steady');await hub.locator('#collect').click();
     await hub.locator('#status').filter({hasText:kind==='captcha'?'验证':kind==='403'||kind==='dynamic403'||kind==='list403'?'403':'429'}).waitFor();await completed();
     assert.equal(fixture.traffic.filter(r=>r.path==='/detail'&&r.id==='3').length,0,kind+' must not visit job 3');
     if(kind==='list403')assert.equal(fixture.traffic.filter(r=>r.path==='/detail').length,0);

@@ -9,7 +9,7 @@ async function widget(page, selector, operation='text', value='') {
     const find=n=>{if(n.attributes?.includes('job-screen-widget'))return n;for(const child of [...(n.children||[]),...(n.shadowRoots||[])]){const r=find(child);if(r)return r;}};
     const host=find(root),shadow=host?.shadowRoots?.[0];assert.ok(shadow,'closed widget shadow exists');
     const {object}=await client.send('DOM.resolveNode',{nodeId:shadow.nodeId});
-    const result=await client.send('Runtime.callFunctionOn',{objectId:object.objectId,functionDeclaration:'function(selector,operation,value){const n=this.querySelector(selector);if(!n)return null;if(operation==="click"){n.click();return true;}if(operation==="fill"){n.value=value;n.dispatchEvent(new Event("change",{bubbles:true}));return true;}return n.textContent;}',arguments:[{value:selector},{value:operation},{value}],returnByValue:true});
+    const result=await client.send('Runtime.callFunctionOn',{objectId:object.objectId,functionDeclaration:'function(selector,operation,value){const n=this.querySelector(selector);if(!n)return null;if(operation==="click"){n.click();return true;}if(operation==="fill"){n.value=value;n.dispatchEvent(new Event("change",{bubbles:true}));return true;}if(operation==="value")return n.value;if(operation==="disabled")return n.disabled;if(operation==="remember"){this.__savedRow=n;return true;}if(operation==="same")return this.__savedRow===n;return n.textContent;}',arguments:[{value:selector},{value:operation},{value}],returnByValue:true});
     return result.result.value;
   } finally {await client.detach();}
 }
@@ -39,11 +39,15 @@ async function until(check,timeout=25000){const end=Date.now()+timeout;while(Dat
   await a.locator('#job-screen-widget').waitFor();assert.equal(await a.evaluate(()=>document.querySelector('#job-screen-widget').shadowRoot),null);
   assert.match(await widget(a,'section'),/开始检索/);assert.equal(await hub.locator('.job-row').count(),0);pass('toolbar flow opens a private styled widget and one inactive hub without starting collection');
   await hub.locator('#my-degree').selectOption('本科');await hub.locator('#my-major').fill('电气工程及其自动化');
+  await widget(a,'[aria-label="采集速度"]','fill','fast');await until(async()=>await hub.locator('#collect-speed').inputValue()==='fast');
+  pass('widget speed control synchronizes the selected source with the hub');
   await widget(a,'[data-action=start]','click');await until(async()=>Number(await hub.locator('#session-count').textContent())===2);
+  assert.equal(await widget(a,'[aria-label="采集速度"]','disabled'),true);
   await widget(a,'[data-action=hide]','click');await until(()=>a.locator('#job-screen-widget').evaluate(e=>e.style.display==='none'));
   const bindingBefore=await worker.evaluate(async id=>(await chrome.storage.session.get('jobBinding:'+id))['jobBinding:'+id].nonce,ids[0]);
   await worker.evaluate(async id=>JobScreenChannel.showMini(await chrome.tabs.get(id)),ids[1]);
   assert.equal(context.pages().filter(p=>p.url().includes('/jobs.html')).length,1);assert.match(await widget(b,'.count'),/已发现 0/);
+  assert.equal(await widget(b,'[aria-label="采集速度"]','value'),'steady');
   pass('opening a second site reuses the hub and waits for its own start command');
   await widget(b,'[data-action=start]','click');
   await until(async()=>{const data=await worker.evaluate(()=>chrome.storage.session.get(null));return Object.keys(data).filter(k=>k.startsWith('jobWorker:')).length===2;});
@@ -56,6 +60,10 @@ async function until(check,timeout=25000){const end=Date.now()+timeout;while(Dat
   assert.match(await hub.locator('.job-row').filter({hasText:'虚构A2工程师'}).textContent(),/宽泛范围匹配/);
   pass('hidden widget collection completes while browsing another tab and merged results retain real job names with major matches first');
   await worker.evaluate(async id=>JobScreenChannel.showMini(await chrome.tabs.get(id)),ids[0]);
+  await until(async()=>await widget(a,'[aria-label="采集速度"]','disabled')===false);
+  const aTask=await hub.locator('#task-source option').evaluateAll((nodes,id)=>nodes.find(n=>n.value.startsWith(id+':')).value,ids[0]);await hub.locator('#task-source').selectOption(aTask);
+  await widget(a,'.job-name','remember');await widget(a,'[aria-label="采集速度"]','fill','steady');await until(async()=>await hub.locator('#collect-speed').inputValue()==='steady');
+  assert.equal(await widget(a,'.job-name','same'),true);pass('speed-only updates preserve existing widget job rows instead of rebuilding the full list');
   assert.equal(await worker.evaluate(async id=>(await chrome.storage.session.get('jobBinding:'+id))['jobBinding:'+id].nonce,ids[0]),bindingBefore);
   await widget(a,'[data-action=favorite]','click');await until(async()=>Object.keys((await worker.evaluate(()=>chrome.storage.local.get('jobFavorites'))).jobFavorites||{}).length===1);
   await widget(a,'[data-action=clear]','click');await until(async()=>/已发现 0/.test(await widget(a,'.count')));

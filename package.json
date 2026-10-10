@@ -1,6 +1,6 @@
 {
   "name": "job-screen-assistant",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "独立的校园招聘岗位收集与筛选浏览器插件",
   "scripts": {

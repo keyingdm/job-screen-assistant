@@ -1,6 +1,8 @@
 (function (root) {
   'use strict';
   const policy = Object.freeze({ intervalMs: 3000, maxActions: Infinity, maxJobs: Infinity, maxPages: Infinity, cooldownMs: 600000 });
+  const speeds = Object.freeze({ steady: policy.intervalMs, fast: 2000 });
+  const speed = value => Object.hasOwn(speeds, value) ? value : 'steady';
   function record(kind, reason, status = 0, until = 0) { return { kind, reason, status, until }; }
   function error(stop) {
     const e = Error('[JOB_ACCESS:' + stop.kind + ':' + (stop.status || 0) + ':' + (stop.until || 0) + '] ' + stop.reason);
@@ -33,17 +35,23 @@
     return null;
   }
   class Governor {
-    constructor({ intervalMs = policy.intervalMs, maxActions = policy.maxActions, now = Date.now, wait = ms => new Promise(r => setTimeout(r, ms)) } = {}) { this.intervalMs = intervalMs; this.maxActions = maxActions; this.now = now; this.wait = wait; this.pools = new Map(); }
+    constructor({ intervalMs = policy.intervalMs, intervalFor, maxActions = policy.maxActions, now = Date.now, wait = ms => new Promise(r => setTimeout(r, ms)) } = {}) { this.intervalMs = intervalMs; this.intervalFor = intervalFor || (() => this.intervalMs); this.maxActions = maxActions; this.now = now; this.wait = wait; this.pools = new Map(); }
     async permit(run, origin = run.origin) {
-      const pool = this.pools.get(origin) || { next: 0, queue: Promise.resolve() }; this.pools.set(origin, pool);
+      const pool = this.pools.get(origin) || { last: null, intervalMs: 0, queue: Promise.resolve() }; this.pools.set(origin, pool);
       const perform = async () => {
         const check = () => { if (run.stop) throw error(run.stop); if (!run.active) throw error(record('cancelled', '本轮自动读取已结束。')); if (run.count >= this.maxActions) throw error(record('limit', '达到本轮 ' + this.maxActions + ' 次自动访问操作上限，已停止；已有结果保留。')); };
-        check(); const remaining = Math.max(0, pool.next - this.now()); if (remaining) await this.wait(remaining); check();
-        run.count++; pool.next = this.now() + this.intervalMs;
+        check(); let interval;
+        while (true) {
+          interval = this.intervalFor(run, origin);
+          const remaining = pool.last === null ? 0 : Math.max(0, pool.last + Math.max(pool.intervalMs, interval) - this.now());
+          if (!remaining) break;
+          await this.wait(remaining); check();
+        }
+        run.count++; pool.last = this.now(); pool.intervalMs = interval;
       };
       const result = pool.queue.catch(() => {}).then(perform); pool.queue = result.catch(() => {}); return result;
     }
   }
-  const api = { policy, record, error, read, response, detectDocument, Governor };
+  const api = { policy, speeds, speed, record, error, read, response, detectDocument, Governor };
   root.JobScreenAccess = api; if (typeof module !== 'undefined') module.exports = api;
 })(globalThis);
