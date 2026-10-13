@@ -471,6 +471,70 @@ test('detail prose preserves missing degree evidence from the list with source a
   await C.collect(options(d,{read:async()=>listing(['1'],false,{total:1,jobs:[raw('1',{requirements:'学历要求：本科及以上',collectionState:'pending'})]}),readDetail:async()=>({requirements:'电子信息类专业；熟悉设备。',completeness:'detail'})}));
   assert.equal(d.jobs[0].facts.degree.rank,2);assert.equal(d.jobs[0].facts.degree.minimum,true);assert.match(d.jobs[0].requirements,/来源列表/);
 });
+test('stable posting IDs deduplicate repeated pages without replacing enriched jobs',async()=>{
+  const d=C.session('https://example.test/list');let page=1,reads=0;
+  const batch=n=>listing([],n<7,{total:75,pageNumber:n,signature:'page-'+n,jobs:Array.from({length:Math.min(12,75-(n-1)*12)},(_,i)=>raw(String((n-1)*12+i),{recordId:String((n-1)*12+i),identityKind:'record',requirements:'',collectionState:'pending'})).concat(n===2?Array.from({length:9},(_,i)=>raw(String(i),{recordId:String(i),identityKind:'record',requirements:'',collectionState:'pending'})):[])});
+  await C.collect(options(d,{read:async()=>batch(1),next:async()=>batch(++page),readDetail:async()=>{reads++;return {requirements:'本科及以上，电子信息类专业。',completeness:'detail'};}}));
+  assert.equal(d.jobs.length,75);assert.equal(reads,75);assert.equal(d.complete,true);assert.ok(d.jobs.every(j=>j.collectionState==='read'&&j.detailStatus==='loaded'));
+});
+test('link resolution does not mutate cached page identities across a pause',async()=>{
+  const d=C.session('https://example.test/list'),controller=new AbortController();
+  const p=listing(['1','2'],false,{total:2,jobs:['1','2'].map(id=>raw(id,{url:'https://example.test/list',linkKind:'list',titleSelector:'#job'+id,identityKind:'text',requirements:'',collectionState:'pending'}))});
+  await assert.rejects(C.collect(options(d,{signal:controller.signal,read:async()=>p,resolveLink:async css=>'https://example.test/detail?jobId='+css.slice(-1),onUpdate:s=>{if(s.jobs.length===1)controller.abort();}})),{name:'AbortError'});
+  assert.equal(p.jobs[0].id,'1');assert.equal(p.jobs[0].linkKind,'list');
+  await C.collect(options(d,{resolveLink:async css=>'https://example.test/detail?jobId='+css.slice(-1),readDetail:async()=>({requirements:'本科及以上，专业不限。',completeness:'detail'})}));
+  assert.equal(d.jobs.length,2);assert.equal(d.complete,true);
+});
+test('unresolved detail entry is distinguished from a loaded detail with no major',async()=>{
+  const d=C.session('https://example.test/list');await C.collect(options(d,{read:async()=>listing(['1'],false,{total:1,jobs:[raw('1',{linkKind:'list',requirements:'',collectionState:'pending'})]})}));
+  assert.equal(d.jobs[0].detailStatus,'unresolved');assert.match(d.jobs[0].collectionError,/详情入口未识别/);
+});
+test('changing the search scope stops aggregation and retains previous jobs',async()=>{
+  const d=C.session('https://example.test/list');await assert.rejects(C.collect(options(d,{read:async()=>({...listing(['1'],true),scopeURL:'https://example.test/list?city=A'}),next:async()=>({...listing(['2'],false),scopeURL:'https://example.test/list?city=B'})})),/筛选范围已变化/);
+  assert.equal(d.jobs.length,1);assert.equal(d.scopeChanged,true);assert.equal(d.complete,false);
+  assert.equal(require('../extension/jobs-tasks.js').canResume({tabId:1,dataset:d}),false);
+});
+test('merged sources deduplicate proven posting identities and disclose overlap',()=>{
+  const T=require('../extension/jobs-tasks.js').Tasks,m=new T();
+  for(const tabId of [1,2]){const t=m.add({tabId,nonce:String(tabId),url:'https://example.test/list?filter='+tabId});t.dataset={jobs:[J.normalize(raw('same',{identityKind:'record',recordId:'same'}),'page')],total:1,pages:1,complete:true,stage:'done'};}
+  assert.equal(m.aggregate().jobs.length,1);assert.equal(m.aggregate().duplicates,1);assert.equal(m.aggregate().total,null);assert.equal(m.aggregate().complete,false);
+  [...m.items.values()][0].dataset.jobs[0].collectionState='pending';[...m.items.values()][1].dataset.jobs[0].majorRequirements='电子信息类';
+  assert.equal(m.aggregate().jobs[0].collectionState,'read');assert.equal(m.aggregate().jobs[0].majorRequirements,'电子信息类');
+});
+test('a later detail page cannot be counted as another list page',async()=>{
+  const d=C.session('https://example.test/list');await assert.rejects(C.collect(options(d,{next:async()=>({...listing(['detail'],false),kind:'detail',total:1})})),/原列表已变成详情页/);
+  assert.equal(d.jobs.length,2);assert.equal(d.total,3);assert.equal(d.scopeChanged,true);assert.equal(d.complete,false);
+});
+test('more postings than the declared total are a mismatch, never a successful completion',async()=>{
+  const d=C.session('https://example.test/list');await C.collect(options(d,{read:async()=>listing(['1','2'],false,{total:1})}));
+  assert.equal(d.complete,false);assert.equal(d.countMismatch,true);assert.equal(d.stage,'interrupted');assert.match(d.stopReason,/数量未核对一致/);
+  assert.equal(require('../extension/jobs-tasks.js').canResume({tabId:1,dataset:d}),false);
+});
+test('continuing after an incomplete body retries only incomplete details',async()=>{
+  const T=require('../extension/jobs-tasks.js'),m=new T.Tasks(),t=m.add({tabId:1,nonce:'retry',url:'https://example.test/list'}),reads={};
+  const config=options(null,{read:async()=>listing(['1','2'],false,{total:2,jobs:['1','2'].map(id=>raw(id,{requirements:'',collectionState:'pending'}))}),readDetail:async url=>{const id=url.slice(-1);reads[id]=(reads[id]||0)+1;return id==='1'&&reads[id]===1?{requirements:'本科',completeness:'detail-summary'}:{requirements:'本科及以上，电子信息类专业。',completeness:'detail'};}});
+  await m.run(t,config);assert.equal(t.dataset.jobs[0].detailStatus,'body-incomplete');assert.equal(T.canResume(t),true);
+  await m.run(t,config,true);assert.deepEqual(reads,{'1':2,'2':1});assert.ok(t.dataset.jobs.every(j=>j.collectionState==='read'));assert.equal(T.canResume(t),false);
+});
+test('a loaded body with no qualifications is missing evidence, not an unread body',async()=>{
+  const d=C.session('https://example.test/list');await C.collect(options(d,{read:async()=>listing(['1'],false,{total:1,jobs:[raw('1',{requirements:'',collectionState:'pending'})]}),readDetail:async()=>({requirements:'',description:'执行虚构工作。',detailStatus:'loaded',completeness:'detail-missing'})}));
+  assert.equal(d.jobs[0].detailStatus,'loaded');assert.equal(d.jobs[0].collectionState,'missing');assert.match(d.jobs[0].collectionError,/正文已读取/);assert.equal(require('../extension/jobs-tasks.js').canResume({tabId:1,dataset:d}),false);
+});
+test('catalogue-name lists ending with 等 are recognized without the word major',()=>{
+  const value=job('1.本科及以上学历，电子信息科学与技术、通信工程、物理学等；\n2.本科通过英语四级。');
+  assert.equal(J.majors.extract(value).known,true);assert.equal(J.matchMajor(value,'通信').hit,true);assert.equal(J.matchMajor(value,'物理').hit,true);
+  for(const text of ['熟悉电子信息科学与技术、通信工程、物理学等','通信工程、物理学等设备维修','北京、上海等']) assert.equal(J.majors.extract(job(text)).known,false);
+});
+test('degree-specific English thresholds do not impose the graduate threshold on undergraduates',()=>{
+  for(const text of ['本科及以上学历；本科通过英语四级；硕士通过英语六级','本科及以上学历；本科通过四级（硕士六级）','本科及以上学历；本科英语四级，硕士英语六级']) {
+    const j=job(text);assert.equal(j.facts.degree.rank,2);assert.equal(j.facts.degree.uncertain,false);
+    const checks=J.evaluate(j,{degree:'本科',english:'1'}).checks;assert.equal(checks.find(c=>c.label==='学历').state,'pass');assert.equal(checks.find(c=>c.label==='英语').state,'pass');
+    assert.equal(J.evaluate(j,{degree:'硕士',english:'1'}).checks.find(c=>c.label==='英语').state,'fail');
+    assert.equal(J.evaluate(j,{english:'1'}).checks.find(c=>c.label==='英语').state,'review');
+  }
+  assert.equal(J.evaluate(job('本科及以上学历，英语六级'),{degree:'本科',english:'1'}).state,'fail');
+  assert.equal(J.evaluate(job('英语四级（本科）/六级（硕士）'),{degree:'本科',english:'1'}).checks.find(c=>c.label==='英语').state,'review');
+});
 test('unchanged and empty later pages still finish all discovered details',async()=>{
   for(const nextPage of [listing(['1','2'],true,{total:null}),listing([],false,{total:null})]){
     const d=C.session('https://large.invalid/list');let details=0;

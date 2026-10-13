@@ -60,6 +60,7 @@ globalThis.JobScreenChannel = (() => {
     const permission = chrome.permissions.request({ origins: [new URL(tab.url).origin + '/*'] }).catch(() => false);
     const binding = await bind(tab); await hub(binding, false); await permission;
     await chrome.storage.session.set({ ['jobWidget:' + tab.id]: true });
+    binding.position = (await chrome.storage.session.get('jobWidgetPosition:' + tab.id))['jobWidgetPosition:' + tab.id] || null;
     await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['jobs-widget.js'] });
     await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: data => JobScreenWidget.show(data), args: [binding] });
     const saved = (await chrome.storage.session.get('jobHubTab')).jobHubTab;
@@ -109,10 +110,17 @@ globalThis.JobScreenChannel = (() => {
       }
       const tabId = Number(message.tabId), binding = (await chrome.storage.session.get('jobBinding:' + tabId))['jobBinding:' + tabId];
       if (sender.id !== chrome.runtime.id || sender.tab?.id !== tabId || !binding || binding.nonce !== message.nonce || new URL(sender.url).origin !== binding.origin) throw Error('小窗与当前网站未绑定');
-      if (!['snapshot', 'start', 'resume', 'restart', 'pause', 'clear', 'focus', 'detail', 'favorite', 'search', 'degree', 'speed', 'hide'].includes(message.action)) throw Error('小窗操作无效');
+      if (!['snapshot', 'start', 'resume', 'restart', 'pause', 'clear', 'focus', 'detail', 'favorite', 'search', 'degree', 'speed', 'hide', 'collapse', 'expand', 'position'].includes(message.action)) throw Error('小窗操作无效');
       if (message.action === 'speed' && !Object.hasOwn(JobScreenAccess.speeds, message.speed)) throw Error('采集速度无效');
       if (message.action === 'degree' && !['','专科','本科','硕士','博士'].includes(message.degree)) throw Error('学历设置无效');
       if (message.action === 'hide') { await chrome.storage.session.set({ ['jobWidget:' + tabId]: false }); return true; }
+      if (message.action === 'collapse' || message.action === 'expand') { await chrome.storage.session.set({ ['jobWidget:' + tabId]: message.action === 'collapse' ? 'collapsed' : true }); return true; }
+      if (message.action === 'position') {
+        const key = 'jobWidgetPosition:' + tabId, p = message.position;
+        if (p === null) { await chrome.storage.session.remove(key); return true; }
+        if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y) || p.x < 0 || p.y < 0 || p.x > 100000 || p.y > 100000) throw Error('小窗位置无效');
+        await chrome.storage.session.set({[key]:{x:p.x,y:p.y}}); return true;
+      }
       const metadata = { tabId, nonce: binding.nonce, url: sender.tab.url, title: sender.tab.title || '' };
       if (message.action === 'snapshot') {
         // Polling must never reopen a closed hub or start another collection.
@@ -133,10 +141,10 @@ globalThis.JobScreenChannel = (() => {
   chrome.tabs.onUpdated.addListener((tabId, change, tab) => {
     if (change.status !== 'complete' || !/^https?:\/\//.test(tab.url || '')) return;
     (async () => {
-      const data = await chrome.storage.session.get(['jobWidget:' + tabId, 'jobBinding:' + tabId, 'jobHubTab']), binding = data['jobBinding:' + tabId], owner = data.jobHubTab;
+      const data = await chrome.storage.session.get(['jobWidget:' + tabId, 'jobWidgetPosition:' + tabId, 'jobBinding:' + tabId, 'jobHubTab']), binding = data['jobBinding:' + tabId], owner = data.jobHubTab;
       if (!data['jobWidget:' + tabId] || !owner || !binding || new URL(tab.url).origin !== binding.origin) return;
       if ((await chrome.storage.session.get(ownerKey(owner, tabId)))[ownerKey(owner, tabId)] !== binding.nonce) return;
-      const metadata = { tabId, nonce: binding.nonce, url: tab.url, title: tab.title || '' };
+      const metadata = { tabId, nonce: binding.nonce, url: tab.url, title: tab.title || '', collapsed:data['jobWidget:' + tabId] === 'collapsed', position:data['jobWidgetPosition:' + tabId] || null };
       await chrome.scripting.executeScript({ target: { tabId }, files: ['jobs-widget.js'] });
       await chrome.scripting.executeScript({ target: { tabId }, func: value => JobScreenWidget.show(value), args: [metadata] });
       const state = await request(owner, 'snapshot', metadata);

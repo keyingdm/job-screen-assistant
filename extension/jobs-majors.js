@@ -14,7 +14,7 @@
   const join = entries => [...new Set(entries.map(e => e.text))].join('；');
   function lookup(value) { return names.get(norm(value)) || null; }
   function bare(value) {
-    const s = norm(value).replace(/(?:及以上|学历|学位|本科|硕士|博士)/g, '');
+    const s = norm(value).replace(/(?:及以上|学历|学位|本科|硕士|博士)/g, '').replace(/等$/, '');
     if (names.has(s) || categoryNames.includes(s)) return true;
     const tokens = s.split(/[、,，/或]+/).filter(Boolean);
     return tokens.length > 0 && tokens.every(t => names.has(t) || categoryNames.includes(t));

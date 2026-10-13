@@ -7,8 +7,9 @@
   const BAD = /^(?:申请|立即申请|投递|立即投递|申请职位|登录|注册|收藏|首页|返回|查看详情|关闭详情|下一页|上一页|更多)$/;
   const NEXT = /^(?:下一页|下页|下一頁|Next|Next page|›|»|→|加载更多|更多岗位|Load more)$/i;
   const FIELD_TITLE = /^(?:招聘类型|招聘类别|学历要求|学历|工作地点|工作城市|工作地区|招聘公司|招聘单位|所属单位|所属公司|岗位类型|岗位类别|职位类型|职位类别|专业要求|专业类别|岗位分类|职位分类|专业标签|筛选条件|筛选|搜索|公司|城市|任职要求|任职资格|岗位职责|工作内容|职位描述|福利待遇|薪酬待遇|查看详情|查看职位详情|职位详情|详情|没有更多职位|没有更多了)[：:\s]*$/;
-  const TITLE_QUERY = 'h1,h2,h3,h4,a[href],[role=link],[class*="title" i],[class*="jobName" i],[class*="positionName" i]';
-  const JOB_TITLE = /(?:job|position|vacancy|career).*(?:title|name)|(?:title|name).*(?:job|position|vacancy|career)/i;
+  const TITLE_QUERY = 'h1,h2,h3,h4,a[href],[role=link],[class*="title" i],[class*="jobName" i],[class*="positionName" i],[class*="postName" i],[class*="posTitle" i],[class*="pos-title" i],[class*="post-title" i]';
+  const JOB_TITLE = /(?:job|position|vacancy|career|post|pos).*(?:title|name)|(?:title|name).*(?:job|position|vacancy|career|post|pos)/i;
+  const EXCLUDED = 'header,footer,nav,aside,[role=search],[role=dialog],[class*="recommend" i],[class*="similar-post" i],[class*="similarPost" i],[class*="similar-job" i],[class*="related-job" i]';
   const ORGANIZATION = /(?:有限公司|股份公司|集团|公司|研究院|研究所|大学|医院|工厂|中心)$/;
   const isOrganization = el => ORGANIZATION.test(text(el)) && !JOB_TITLE.test(el.className || '') && !/[-—·]/.test(text(el));
   const DETAIL_ACTION = /^(?:查看(?:职位|岗位)?详情|展开详情|职位详情|岗位详情|展开)$/;
@@ -44,11 +45,38 @@
   function safeURL(value, base) {
     try { const u = new URL(value, base); return /^https?:$/.test(u.protocol) && !u.username && !u.password ? u.href : ''; } catch { return ''; }
   }
+  function listScope(base, doc) {
+    const u = new URL(base);
+    if (!/^#(?:\/|!)/.test(u.hash)) u.hash = '';
+    if (doc) for (const form of doc.querySelectorAll('form')) {
+      if (!/search|filter|list|position|job|school|campus|social/i.test(form.getAttribute('action') || form.id || form.className || '') && form.getAttribute('role') !== 'search') continue;
+      for (const el of form.querySelectorAll('input[name],select[name],textarea[name]')) {
+        if (el.type === 'password' || /password|email|phone|mobile|account|username|fullName|birth|csrf|token|nonce|signature|captcha/i.test(el.name)) continue;
+        if (['checkbox','radio'].includes(el.type) && !el.checked) continue;
+        u.searchParams.set(el.name, el.value);
+      }
+    }
+    for (const k of [...u.searchParams.keys()]) if (/^(?:currentPage|page|pageNo|pageNum|pageIndex|pageSize|offset|limit|from|utm_.*)$/i.test(k)) u.searchParams.delete(k);
+    u.searchParams.sort(); return u.href;
+  }
+  function recordID(node) {
+    for (const key of ['data-post-id','data-job-id','data-position-id','data-vacancy-id','data-requisition-id']) if (node.getAttribute(key)) return node.getAttribute(key);
+    return /^(?:[a-f\d]{16,}|\d{3,})$/i.test(node.id || '') ? node.id : '';
+  }
+  function postingIdentity(base, id) { const u = new URL(base); return u.origin + u.pathname.replace(/\/[^/]*$/, '/') + '#posting=' + encodeURIComponent(id); }
+  function linkIdentity(url) {
+    const u = new URL(url), entries = [...u.searchParams];
+    const entry = entries.find(([k]) => /^(?:postId|jobId|positionId|vacancyId|requisitionId)$/i.test(k)) || entries.find(([k]) => /^id$/i.test(k));
+    if (entry) return postingIdentity(url, entry[1]);
+    if (!/^#(?:\/|!)/.test(u.hash)) u.hash = '';
+    for (const k of [...u.searchParams.keys()]) if (/^(?:utm_.*|tracking|trackingId|ref|source)$/i.test(k)) u.searchParams.delete(k);
+    u.searchParams.sort(); return u.href;
+  }
   function section(value, kind) {
     const lines = value.split('\n'), out = []; let found = false;
     for (const line of lines) {
       if (!found && kind.test(line.trim())) { found = true; out.push(line.trim().replace(kind, '')); continue; }
-      if (found && (REQUIRE.test(line.trim()) || DUTIES.test(line.trim()) || BENEFITS.test(line.trim()) || /^(?:申请|立即投递|相关推荐|发布时间|截止时间|关闭详情)/.test(line.trim()))) break;
+      if (found && (REQUIRE.test(line.trim()) || DUTIES.test(line.trim()) || BENEFITS.test(line.trim()) || /^(?:专业要求|所学专业|专业背景|申请|立即投递|相关推荐|发布时间|截止时间|关闭详情)/.test(line.trim()))) break;
       if (found) out.push(line);
     }
     return clean(out.join('\n'));
@@ -96,7 +124,7 @@
     const candidates = summary.split(/[\n|｜·•]+/).map(s => s.trim()).filter(s => s.length < 180 && badge.test(s));
     if (candidates.length) return [...new Set(candidates)].join('\n');
     for (const el of node.querySelectorAll('span,p,li,div,td,dd,[itemprop="educationRequirements"]')) {
-      if (el.children.length || el.closest('nav,footer,aside,[hidden],[aria-hidden="true"]')) continue;
+      if ([...el.children].some(child => text(child)) || el.closest('nav,footer,aside,[hidden],[aria-hidden="true"]')) continue;
       const s = text(el);
       if (s.length < 180 && badge.test(s) && summary.includes(s)) return s;
     }
@@ -115,20 +143,20 @@
       }
       return clone;
     };
-    const outside = [...doc.querySelectorAll('[class*="jobTitle" i],[class*="positionTitle" i],[class*="jobName" i],[class*="positionName" i],h1')]
-      .filter(el => !area.contains(el) && !el.closest('nav,footer,aside,[role=search],[class*="recommend" i]') && candidateName(el));
+    const outside = [...doc.querySelectorAll('[class*="jobTitle" i],[class*="positionTitle" i],[class*="jobName" i],[class*="positionName" i],[class*="postName" i],[class~="tit"],h1')]
+      .filter(el => !area.contains(el) && !el.closest(EXCLUDED) && candidateName(el));
     let header;
     for (const title of outside) {
       for (let n = title.parentElement, depth = 0; n && n !== doc.body && !n.contains(area) && depth < 6; n = n.parentElement, depth++) {
         const value = text(n);
         if (value.length > 8000 || [...n.querySelectorAll('h1,[class*="jobTitle" i],[class*="positionTitle" i]')].filter(candidateName).length > 1) break;
-        if (degreeField(value, n) || majorField(value, n)) { header = n; break; }
+        if (degreeField(value, n) || majorField(value, n) || company(value,n,candidateName(title))) { header = n; break; }
       }
       if (header) break;
     }
     if (header) scope.append(cloneVisible(header));
     scope.append(cloneVisible(area));
-    for (const el of scope.querySelectorAll('nav,footer,aside,form,script,style,noscript,template,[role=search],[hidden],[aria-hidden="true"],[class*="recommend" i],[class*="related-jobs" i],[class*="similar-jobs" i]')) el.remove();
+    for (const el of scope.querySelectorAll(EXCLUDED + ',form,script,style,noscript,template,[hidden],[aria-hidden="true"]')) el.remove();
     for (const el of [...scope.querySelectorAll('*')]) if (/display\s*:\s*none|visibility\s*:\s*hidden/i.test(el.getAttribute('style') || '')) el.remove();
     // Recommendations may use a heading instead of a semantic container.
     for (const heading of [...scope.querySelectorAll('h1,h2,h3,h4,h5,h6,p,div')]) {
@@ -139,17 +167,35 @@
     }
     return scope;
   }
+  function contentScope(area) {
+    const headings = [...area.querySelectorAll('h1,h2,h3,h4,h5,h6,div,p,span')].filter(el => {
+      if (el.closest(EXCLUDED)) return false;
+      const s = text(el).trim();
+      return [REQUIRE,DUTIES,BENEFITS].some(re => re.test(s) && !s.replace(re,'').trim()) || /^(?:专业要求|所学专业|招聘专业)[:：]?$/.test(s);
+    });
+    if (!headings.length) return area;
+    let scope = headings[0].parentElement;
+    while (scope && !headings.every(el => scope.contains(el))) scope = scope.parentElement;
+    return scope && text(scope).length <= 30000 ? scope : area;
+  }
   function expiry(value) {
     const raw = value.match(/(?:报名截止日期|投递截止时间|截止时间|截止日期|申请截止)[：:\s]*(20\d{2})[年/.-](\d{1,2})[月/.-](\d{1,2})(?:日)?(?:[ T](\d{1,2}:\d{2}(?::\d{2})?))?/);
     return raw ? raw[1] + '-' + raw[2].padStart(2, '0') + '-' + raw[3].padStart(2, '0') + (raw[4] ? ' ' + raw[4] : '') : '';
   }
   function company(value, node, name) {
     const named = [...node.querySelectorAll('[class*="company" i],[class*="employer" i],[class*="orgName" i]')].map(text).find(s => s && s !== name && s.length < 100);
-    return field(value, '招聘单位|公司名称|招聘公司|用人单位') || named ||
+    const boundary = value.split('\n').findIndex(s => REQUIRE.test(s.trim()) || DUTIES.test(s.trim()) || BENEFITS.test(s.trim()) || /^(专业要求|所学专业)[:：]?$/.test(s.trim()));
+    const summary = value.split('\n').slice(0,boundary < 0 ? undefined : boundary).join('\n');
+    const leaf = [...node.querySelectorAll('span,p,td,dd')].map(text).map(s => s.replace(/[|｜\s]+$/g,'').trim()).find(s => s !== name && s.length < 100 && ORGANIZATION.test(s) && summary.includes(s));
+    return field(value, '招聘单位|公司名称|招聘公司|用人单位') || named || leaf ||
       value.split('\n').find(s => s !== name && /(?:有限公司|股份公司|研究院|集团|公司|分公司|工厂|中心)$/.test(s.trim())) || [...node.querySelectorAll('h5,h4')].map(text).find(s => s && s !== name && s.length < 100) || '';
   }
-  function city(value) {
-    return field(value, '工作地点|工作城市|岗位地点|工作地区') ||
+  function city(value, node) {
+    const named = node && [...node.querySelectorAll('[class*="work-place" i],[class*="workPlace" i],[class*="location" i],[itemprop="jobLocation"]')].map(text).find(s => s && s.length < 80);
+    const boundary = value.split('\n').findIndex(s => REQUIRE.test(s.trim()) || DUTIES.test(s.trim()) || BENEFITS.test(s.trim()) || /^(专业要求|所学专业)[:：]?$/.test(s.trim()));
+    const summary = value.split('\n').slice(0,boundary < 0 ? undefined : boundary).join('\n');
+    const leaf = node && [...node.querySelectorAll('span,p,td,dd')].filter(el=>![...el.children].some(child=>text(child))).map(text).find(s => /^[\u3400-\u9fff·-]{2,30}(?:市|区|县)$/.test(s) && summary.includes(s));
+    return field(value, '工作地点|工作城市|岗位地点|工作地区') || named?.replace(/[|｜\s]+$/g,'').trim() || leaf ||
       value.split('\n').find(s => /^[^｜|\n]{1,35}[｜|]\s*(全职|实习|兼职)/.test(s))?.split(/[｜|]/)[0] ||
       value.split('\n').find(s => /^(?:北京|上海|天津|重庆|内蒙古|宁夏|广西|新疆|西藏|香港|澳门|[^\s]{2,8}[省市])/.test(s) && s.length < 45) || '';
   }
@@ -176,8 +222,9 @@
     }
     const merged = [requirement];
     for (const line of [...summaries, ...clauses.split('\n')]) if (line && !merged.some(part => part && part.includes(line))) merged.push(line);
-    return { id: url || base + '#job=' + encodeURIComponent(name + '|' + company(value, node, name) + '|' + city(value) + '|' + (fingerprint >>> 0).toString(36)), url: url || base,
-      name, company: company(value, node, name), city: city(value), group: field(value, '所属单位|上级单位|所属集团'),
+    const record = recordID(node), id = record ? postingIdentity(base,record) : url ? linkIdentity(url) : listScope(base,node.ownerDocument) + '#job=' + encodeURIComponent(name + '|' + company(value, node, name) + '|' + city(value,node) + '|' + (fingerprint >>> 0).toString(36));
+    return { id, recordId: record, identityKind: record ? 'record' : url ? 'link' : 'text', url: url || base,
+      name, company: company(value, node, name), city: city(value,node), group: field(value, '所属单位|上级单位|所属集团'),
       requirements: merged.filter(Boolean).join('\n'), majorRequirements: major, description: section(value, DUTIES), benefits: section(value, BENEFITS),
       nature: field(value, '岗位性质|工作性质') || value.match(/(?:全职|实习|兼职|合同工)/)?.[0] || '',
       closes: expiry(value), completeness: requirement || (detailOnly && (major || clauses)) ? 'detail' : detailOnly ? 'detail-summary' : 'list-summary', linkKind: url ? 'detail' : 'list',
@@ -194,7 +241,7 @@
         const description = plain(item.description), embedded = section(description, REQUIRE) || qualificationClauses(description);
         const qualifications = plain(item.qualifications), req = [qualifications, plain(item.educationRequirements), plain(item.experienceRequirements), embedded, item.skills && '技能要求：' + plain(item.skills)].filter(Boolean).join('\n');
         const url = item.url ? safeURL(item.url, base) : '', name = plain(item.title), employer = plain(item.hiringOrganization);
-        found.push({ id: url || base + '#job=' + encodeURIComponent([name, employer, locations.join('/'), plain(item.identifier) || item.identifier?.value || ''].join('|')), url: url || base, name, company: employer, city: locations.join(' / '),
+        found.push({ id: url ? linkIdentity(url) : listScope(base,doc) + '#job=' + encodeURIComponent([name, employer, locations.join('/'), plain(item.identifier) || item.identifier?.value || ''].join('|')), identityKind: url ? 'link' : 'text', url: url || base, name, company: employer, city: locations.join(' / '),
           requirements: req, description, closes: plain(item.validThrough), nature: plain(item.employmentType),
           completeness: qualifications || embedded ? 'detail' : req ? 'detail-summary' : 'detail-missing', collectionState: qualifications || embedded ? 'read' : 'pending', linkKind: url ? 'detail' : 'list' });
       }
@@ -207,13 +254,19 @@
     if (rule.next) { try { const e = doc.querySelector(rule.next); if (e && !e.disabled && e.getAttribute('aria-disabled') !== 'true' && !e.closest('.disabled,.is-disabled')) return e; return null; } catch {} }
     return [...doc.querySelectorAll('a,button,[role=button],[class*="next" i][title],[class*="next" i][aria-label]')].find(el => {
       const label = clean(el.getAttribute('aria-label') || el.title || text(el));
-      const disabled = el.disabled || el.getAttribute('aria-disabled') === 'true' || el.closest('.disabled,.is-disabled');
+      const disabled = el.disabled || el.getAttribute('aria-disabled') === 'true' || el.closest('.disabled,.is-disabled,[aria-disabled="true"],[class*="pagination-disabled"]');
       const pagination = el.closest('nav,[class*="pagination" i],[class*="pager" i],[aria-label*="分页"],[aria-label*="Pagination"]');
       return !disabled && visible(el) && (el.getAttribute('rel') === 'next' || ((NEXT.test(label) || /\bnext(?: page)?\b/i.test(label) || /(?:^|\s)(?:btn-)?next(?:\s|$)/i.test(el.className || '')) && pagination) || (/^(加载更多|更多岗位|Load more)$/i.test(label) && !el.closest('form')));
     }) || null;
   }
   function candidateName(el) {
-    const name = text(el);
+    let name = text(el);
+    // Titles can contain category badges; retain the literal title without those labels.
+    if (JOB_TITLE.test(el.className || '') || el.classList.contains('tit')) {
+      const clone = el.cloneNode(true);
+      for (const badge of clone.querySelectorAll('[class*="label" i],[class*="badge" i],[class*="tag" i],[class*="cate" i]')) badge.remove();
+      name = text(clone) || name;
+    }
     if (/(?:company|employer|organization|org).*(?:name|title)|(?:name|title).*(?:company|employer|organization)/i.test(el.className || '') && !JOB_TITLE.test(el.className || '')) return '';
     const heading = name.replace(/^\d+[、.．）)]\s*/, '').replace(/[：:\s]+$/, '');
     const sectionHeading = [REQUIRE, DUTIES, BENEFITS].some(pattern => pattern.test(heading) && heading.replace(pattern, '').trim() === '');
@@ -222,7 +275,7 @@
   }
   function cardFor(el, name, rule) {
     for (let node = el.parentElement, depth = 0; node && node.tagName !== 'BODY' && depth < 10; node = node.parentElement, depth++) {
-      if (node.matches('header,footer,nav,aside,[role=search],[role=dialog]')) return null;
+      if (node.closest(EXCLUDED)) return null;
       const value = text(node);
       if (value.length < name.length + 4) continue;
       if (value.length > 16000) return null;
@@ -235,7 +288,7 @@
       const actions = [...node.querySelectorAll('a,button,[role=button]')].some(b => DETAIL_ACTION.test(text(b)));
       const titleCount = [...node.querySelectorAll(TITLE_QUERY)].filter(t => candidateName(t) && !isOrganization(t) && text(t) !== name && (JOB_TITLE.test(t.className || '') || t.matches('h1,h2,h3,h4,a[href],[role=link]'))).length;
       if (titleCount > 1) return null;
-      if ((repeated || semantic) && (evidence || titleClass || actions || rule.title)) return node;
+      if ((repeated || semantic) && (evidence || titleClass || actions || recordID(node) || rule.title)) return node;
     }
     return null;
   }
@@ -249,14 +302,16 @@
     const titleNodes = rule.title ? [...area.querySelectorAll(rule.title)] : [...area.querySelectorAll(TITLE_QUERY)];
     const jobs = detailOnly ? [] : structured, seen = new Set();
     if (!detailOnly && !structured.length) for (const candidate of titleNodes) {
-      if (candidate.closest('header,footer,nav,aside,[role=search],[role=dialog]')) continue;
+      if (candidate.closest(EXCLUDED)) continue;
       const name = candidateName(candidate); if (!name) continue;
       if ([...candidate.querySelectorAll(TITLE_QUERY)].some(child => candidateName(child) && text(child) !== name)) continue;
       const el = candidate.matches('a,[role=link]') ? candidate : [...candidate.querySelectorAll('a,[role=link],span')].filter(n => text(n) === name).pop() || candidate;
-      const href = el.getAttribute('href'), url = href && !/^\s*#\s*$/.test(href) ? safeURL(href, base) : '';
+      const ancestorLink = candidate.closest('a[href],[role=link]');
+      const link = el.getAttribute('href') ? el : ancestorLink || el;
+      const href = link.getAttribute('href'), url = href && !/^\s*#\s*$/.test(href) ? safeURL(href, base) : '';
       if (href && !url && !/^\s*(?:javascript:|#\s*$)/i.test(href)) continue;
-      const titleLike = candidate.matches('h1,h2,h3,h4,[role=link]') || /title|jobname|positionname/i.test(candidate.className || '') || /title/i.test(el.parentElement?.className || '');
-      const pathLike = url && /[?&](?:id|jobId|positionId)=|\/(?:job|position|detail|vacancy|career)[^/]*\/|\/\d{3,}(?:[/?#]|$)/i.test(url);
+      const titleLike = candidate.matches('h1,h2,h3,h4,[role=link]') || JOB_TITLE.test(candidate.className || '') || /title/i.test(candidate.className || '') || /title/i.test(el.parentElement?.className || '');
+      const pathLike = url && /[?&](?:id|postId|jobId|positionId|vacancyId|requisitionId)=|\/(?:job|position|posDetail|post|detail|vacancy|career)[^/]*(?:\/|\.html)|\/\d{3,}(?:[/?#]|$)/i.test(url);
       if (!titleLike && !pathLike && !rule.title) continue;
       const card = cardFor(candidate, name, rule);
       if (!card) continue;
@@ -264,16 +319,17 @@
       const job = facts(card, base, name, url);
       if (!rule.title && job.company === name) continue;
       if (seen.has(job.id)) continue; seen.add(job.id);
-      if (!url && doc.defaultView) job.titleSelector = selector(el);
+      if (!url && doc.defaultView) job.titleSelector = selector(job.recordId ? card : el);
       const btn = [...card.querySelectorAll('button,a,[role=button]')].find(b => DETAIL_ACTION.test(text(b)) && visible(b));
       if (btn && doc.defaultView) job.expandSelector = selector(btn);
       jobs.push(job);
     }
     if (!jobs.length || detailOnly) {
-      const detailArea = detailScope(doc, rule.area ? area : doc.querySelector('main,[role=main],article,.content') || area);
+      const detailArea = detailScope(doc, contentScope(rule.area ? area : doc.querySelector('main,[role=main],article,.content') || area));
       const value = text(detailArea), req = section(value, REQUIRE);
-      if (value.split('\n').some(line => REQUIRE.test(line.trim())) || (detailOnly && (degreeField(value, detailArea) || majorField(value, detailArea) || qualificationClauses(value)))) {
-        const explicit = [...detailArea.querySelectorAll('[class*="jobTitle" i],[class*="positionTitle" i],[class*="jobName" i],[class*="positionName" i]')].map(candidateName).find(Boolean);
+      const bodyTitle = [...detailArea.querySelectorAll('[class*="jobTitle" i],[class*="positionTitle" i],[class*="jobName" i],[class*="positionName" i],[class*="postName" i],[class~="tit"],h1,h2,h3')].map(candidateName).find(Boolean);
+      if (value.split('\n').some(line => REQUIRE.test(line.trim())) || (detailOnly && (degreeField(value, detailArea) || majorField(value, detailArea) || qualificationClauses(value) || (bodyTitle && section(value,DUTIES))))) {
+        const explicit = [...detailArea.querySelectorAll('[class*="jobTitle" i],[class*="positionTitle" i],[class*="jobName" i],[class*="positionName" i],[class*="postName" i],[class~="tit"]')].map(candidateName).find(Boolean);
         const title = explicit || [...detailArea.querySelectorAll('h1,h2,h3')].map(candidateName).find(Boolean) || '';
         const job = facts(detailArea, base, field(value, '招聘岗位|岗位名称|职位名称') || title, base, true);
         if (detailOnly && structured.length === 1) {
@@ -288,12 +344,12 @@
       if (detailOnly) return structured.length ? { url: base, jobs: structured.map(j => ({...j, url: base, linkKind: 'detail'})), kind: 'detail', next: false, total: 1 } : { url: base, jobs: [], kind: 'unknown', next: false, total: null };
     }
     const next = nextControl(doc, rule), pageText = text(doc.body);
-    const totalMatch = pageText.match(/共[（(\s]*(\d+)[）)\s]*(?:条(?:记录)?|个?(?:职位|岗位))/) || pageText.match(/(?:^|\n)\s*(\d+)\s*个?(?:职位|岗位)\s*(?:\n|$)/);
+    const totalMatch = pageText.match(/共[（(\s]*(\d+)[）)\s]*(?:条(?:记录)?|个?(?:职位|岗位))/) || pageText.match(/(?:在招职位|在招岗位|职位总数|岗位总数|职位数量|岗位数量)\s*[:：]?\s*(\d+)\s*个?/) || pageText.match(/(?:^|\n)\s*(\d+)\s*个?(?:职位|岗位)\s*(?:\n|$)/);
     const pagesMatch = pageText.match(/共\s*(\d+)\s*页/);
-    const pageNode = doc.querySelector('[aria-current=page],.pagination .active,.pagination .is-active,.pager .active,.el-pager .is-active');
+    const pageNode = doc.querySelector('[aria-current=page],.pagination .active,.pagination .is-active,.pager .active,.el-pager .is-active,[class*="pagination-item-active"]');
     const total = totalMatch ? Number(totalMatch[1]) : null;
     const scroll = Boolean(!next && !rule.next && doc.defaultView && jobs.length && (total === null || jobs.length < total));
-    return { url: base, jobs, kind: jobs.length ? 'list' : 'unknown', next: Boolean(next) || scroll, nextKind: next ? 'control' : scroll ? 'scroll' : '',
+    return { url: base, scopeURL: listScope(base,doc), jobs, kind: jobs.length ? 'list' : 'unknown', next: Boolean(next) || scroll, nextKind: next ? 'control' : scroll ? 'scroll' : '',
       nextURL: next ? safeURL(next.getAttribute('href'), base) : '', total: totalMatch ? Number(totalMatch[1]) : null,
       totalPages: pagesMatch ? Number(pagesMatch[1]) : null, pageNumber: Number(text(pageNode)) || null,
       signature: jobs.map(j => j.id).join('|') };
@@ -367,5 +423,5 @@
       timer = setTimeout(() => cleanup(null), 55000);
     });
   }
-  root.JobScreenPage = { scan, advance, pick, scanDocument, text, safeURL };
+  root.JobScreenPage = { scan, advance, pick, scanDocument, text, safeURL, listScope, linkIdentity };
 })(globalThis);

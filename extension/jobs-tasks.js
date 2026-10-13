@@ -4,8 +4,8 @@
   const C = typeof module !== 'undefined' ? require('./jobs-collector.js') : root.JobScreenCollector;
   const A = typeof module !== 'undefined' ? require('./jobs-access.js') : root.JobScreenAccess;
   const canResume = task => Boolean(task?.tabId && task.dataset && !task.busy && !task.starting && !task.startPromise && !task.clearing &&
-    !['blocked','limited','permission'].includes(task.dataset.stage) &&
-    (task.dataset.stage !== 'done' || task.dataset.jobs.some(j => j.collectionState === 'failed')));
+    !task.dataset.scopeChanged && !task.dataset.countMismatch && !['blocked','limited','permission'].includes(task.dataset.stage) &&
+    (task.dataset.stage !== 'done' || task.dataset.jobs.some(j => j.collectionState === 'failed' || j.detailStatus === 'body-incomplete')));
   class Tasks {
     constructor(change = () => {}) { this.items = new Map(); this.change = change; }
     add(binding) {
@@ -21,7 +21,7 @@
       const generation = ++task.generation;
       if (!resume || !task.dataset) task.dataset = C.session(task.source.url);
       else {
-        for (const job of task.dataset.jobs) if (job.collectionState === 'failed') job.collectionState = 'pending';
+        for (const job of task.dataset.jobs) if (job.collectionState === 'failed' || job.detailStatus === 'body-incomplete') job.collectionState = 'pending';
         delete task.dataset.accessStop; task.dataset.stopReason = '';
         task.dataset.stage = task.dataset.detailsPending || task.dataset.listEnded ? 'details' : 'list';
       }
@@ -31,9 +31,9 @@
           await C.collect({ ...options, session: task.dataset, signal: task.controller.signal, onUpdate: data => {
             if (task.generation === generation) { task.dataset = data; this.change(task); }
           } });
-          if (task.generation === generation) task.message = ['limited','interrupted'].includes(task.dataset.stage) ? task.dataset.stopReason : task.dataset.jobs.some(j => j.collectionState === 'failed') ? '本次列表采集结束，部分详情读取失败。点击继续可重试失败详情，已读岗位保留。' : '本次采集结束。请核对原文并收藏需要保留的岗位。';
+          if (task.generation === generation) task.message = ['limited','interrupted'].includes(task.dataset.stage) ? task.dataset.stopReason : task.dataset.jobs.some(j => j.collectionState === 'failed' || j.detailStatus === 'body-incomplete') ? '本次列表采集结束，部分详情失败或正文未读完整。点击继续可重试这些详情，已读岗位保留。' : '本次采集结束。请核对原文并收藏需要保留的岗位。';
         } catch (error) {
-          if (task.generation === generation) task.message = (A.read(error)?.reason || (task.controller?.signal.aborted ? '已暂停' : error.message)) + (['paused','interrupted','stopped'].includes(task.dataset.stage) ? ' 本轮进度保留；原招聘页仍可访问时，点击继续本次采集。' : '');
+          if (task.generation === generation) task.message = (A.read(error)?.reason || (task.controller?.signal.aborted ? '已暂停' : error.message)) + (!task.dataset.scopeChanged && !task.dataset.countMismatch && ['paused','interrupted','stopped'].includes(task.dataset.stage) ? ' 本轮进度保留；原招聘页仍可访问时，点击继续本次采集。' : '');
         } finally {
           await options.cleanup?.().catch(() => {});
           if (task.generation === generation) { task.busy = false; task.controller = null; task.promise = null; this.change(task); }
@@ -57,8 +57,16 @@
       if (!selected.length) return null;
       if (selected.length === 1) return { ...selected[0].dataset, jobs: this.jobs(selected[0]) };
       const totalKnown = selected.every(t => Number.isInteger(t.dataset.total));
-      return { source: 'merged', jobs: selected.flatMap(t => this.jobs(t)), total: totalKnown ? selected.reduce((n, t) => n + t.dataset.total, 0) : null,
-        pages: selected.reduce((n, t) => n + (t.dataset.pages || 0), 0), complete: selected.every(t => t.dataset.complete), stage: selected.some(t => t.busy) ? 'running' : selected.some(t => t.dataset.stage !== 'done') ? 'interrupted' : 'done', sourceCount: selected.length };
+      const seen = new Map(), all = selected.flatMap(t => this.jobs(t)), jobs = [];
+      const quality = j => (j.collectionState === 'read' ? 10 : 0) + ['company','city','majorRequirements','requirements'].filter(k=>j[k]).length;
+      for (const j of all) {
+        if (!['record','link'].includes(j.identityKind)) { jobs.push(j); continue; }
+        if (seen.has(j.id)) { const index = seen.get(j.id); if (quality(j) > quality(jobs[index])) jobs[index] = j; }
+        else { seen.set(j.id,jobs.length); jobs.push(j); }
+      }
+      const duplicates = all.length - jobs.length;
+      return { source: 'merged', jobs, total: totalKnown && !duplicates ? selected.reduce((n, t) => n + t.dataset.total, 0) : null, duplicates,
+        pages: selected.reduce((n, t) => n + (t.dataset.pages || 0), 0), complete: !duplicates && selected.every(t => t.dataset.complete), stage: selected.some(t => t.busy) ? 'running' : selected.some(t => t.dataset.stage !== 'done') ? 'interrupted' : 'done', sourceCount: selected.length };
     }
   }
   root.JobScreenTasks = { Tasks, canResume };

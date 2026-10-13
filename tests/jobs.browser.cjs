@@ -13,7 +13,7 @@ let context, passed = 0; const pass = s => { passed++; console.log('PASS ' + s);
   if (legacyWorker) await legacyWorker.evaluate(async () => chrome.storage.local.set({ isolationTest: 'fiction-only', jobProfile: { degree: '博士' } }));
   const id = new URL(worker.url()).host, page = await context.newPage(); page.on('pageerror', e => errors.push(e.message));
   await page.goto('chrome-extension://' + id + '/jobs.html');
-  await page.locator('#result-count').filter({hasText:'0 / 0'}).waitFor();
+  await page.locator('#result-count').filter({hasText:'当前筛选 0 / 全部发现 0'}).waitFor();
   assert.equal(await page.locator('#tab-favorites').getAttribute('aria-selected'),'true');
   assert.equal(await page.locator('#view-table').getAttribute('aria-pressed'),'true');
   pass('production extension opens to favorites with a table default');

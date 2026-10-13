@@ -56,6 +56,7 @@ async function until(check,timeout=90000){const end=Date.now()+timeout;while(Dat
   pass('large ordinary results can be ended and cleared without being persisted as favorites');
   await source.goto(base+'/interrupted?page=1');await worker.evaluate(async id=>JobScreenChannel.showMini(await chrome.tabs.get(id)),tabId);
   await hub.locator('#collect').click();await hub.locator('#status').filter({hasText:'页面加载超时'}).waitFor();
+  await until(async()=>await hub.locator('#resume').isVisible());
   assert.equal(await hub.locator('#session-count').textContent(),'220');assert.match(await hub.locator('#coverage').textContent(),/要求完整 220/);assert.equal(await hub.locator('#resume').isVisible(),true);assert.equal(await hub.locator('#collect').isVisible(),false);
   await until(async()=>/页面加载超时/.test(await widget(source,'.status')) && await widget(source,'[data-action=resume]','visible'));assert.equal(await widget(source,'[data-action=pause]','visible'),false);assert.match(await widget(source,'.count'),/已读详情 220/);
   pass('220-job pagination failure retains already recognized majors and exposes continue in both views even when terminal pushes are lost');

@@ -34,7 +34,7 @@ let context,server,passed=0;const pass=s=>{passed++;console.log('PASS '+s);};
   await page.locator('#coverage').filter({hasText:'已发现 2 /'}).waitFor();await page.locator('#pause').click();await page.locator('#status').filter({hasText:'已暂停'}).waitFor();
   assert.equal(await page.locator('.job-row').count(),2);assert.equal((await page.evaluate(async()=>chrome.storage.local.get(null))).jobDataset,undefined);
   pass('pause keeps temporary records in memory only');
-  await page.locator('#resume').click();await page.locator('#status').filter({hasText:'本次采集结束'}).waitFor();
+  await page.locator('#resume').click();await page.locator('#status').filter({hasText:/本次(?:列表)?采集结束/}).waitFor();
   assert.equal(await page.locator('.job-row').count(),4);
   const post=traffic.filter(r=>r.method==='POST');assert.equal(post.length,1);assert.equal(new URLSearchParams(post[0].payload).get('city'),'武汉');
   assert.ok(!JSON.stringify(traffic).includes('只用于本地比较'));assert.ok(!traffic.some(r=>r.url.startsWith('/apply-trap')));

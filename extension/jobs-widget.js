@@ -4,6 +4,7 @@
   let binding, current = {}, host, panel, list, message, count, search, degree, hideDegree, speed, start, pause, resume, restart, clear, authorize;
   let pollTimer, polling = false, epochFloor = 0;
   let renderedRows = new Map(), listSignature = '';
+  let launcher, launcherButton, position = null, dragging = null, sizeObserver;
   const el = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
   async function send(action, extra = {}) {
     try {
@@ -20,8 +21,71 @@
       else message.textContent = e.message;
     }
   }
-  async function poll() { if (polling || !host?.isConnected || host.style.display === 'none') return; polling = true; try { await send('snapshot'); } finally { polling = false; } }
+  async function poll() { if (polling || !host?.isConnected || host.style.display === 'none' && (!launcher?.isConnected || launcher.style.display === 'none')) return; polling = true; try { await send('snapshot'); } finally { polling = false; } }
   function button(label, action, fn) { const b = el('button', label); b.dataset.action = action; b.type = 'button'; b.onclick = fn || (() => send(action)); return b; }
+  const validPosition = value => value && Number.isFinite(value.x) && Number.isFinite(value.y) ? {x:value.x,y:value.y} : null;
+  function bounds(node, value) {
+    const r = node.getBoundingClientRect(), gap = 8;
+    return {x:Math.max(gap,Math.min(value.x,Math.max(gap,innerWidth-r.width-gap))),y:Math.max(gap,Math.min(value.y,Math.max(gap,innerHeight-r.height-gap)))};
+  }
+  function place(node) {
+    if (!node?.isConnected || node.style.display === 'none') return;
+    if (!position) { Object.assign(node.style,{left:'auto',top:'auto',right:'20px',bottom:'20px'}); return; }
+    const p = bounds(node,position);
+    Object.assign(node.style,{left:p.x+'px',top:p.y+'px',right:'auto',bottom:'auto'});
+    if (node === host) position = p;
+  }
+  function fit() { place(host); place(launcher); }
+  function savePosition() { send('position',{position:position && {...position}}); }
+  function move(node, x, y) { position = bounds(node,{x,y}); place(node); }
+  function finishDrag(cancel = false) {
+    if (!dragging) return;
+    const d = dragging; dragging = null;
+    if (cancel) position = d.before;
+    d.handle.classList.remove('dragging');
+    try { d.handle.releasePointerCapture(d.id); } catch {}
+    fit(); savePosition();
+  }
+  function movable(handle, node) {
+    handle.tabIndex = 0;
+    handle.title = '拖动移动；方向键微调，Home 恢复默认位置';
+    handle.addEventListener('pointerdown', e => {
+      const interactive = e.target.closest('button,input,select,a');
+      if (e.button !== 0 || dragging || interactive && interactive !== handle) return;
+      const r = node.getBoundingClientRect();
+      dragging = {id:e.pointerId,handle,node,startX:e.clientX,startY:e.clientY,x:r.left,y:r.top,before:position && {...position}};
+      handle.classList.add('dragging'); handle.focus({preventScroll:true});
+      handle.setPointerCapture(e.pointerId); e.preventDefault();
+    });
+    handle.addEventListener('pointermove', e => { if (dragging?.handle === handle && dragging.id === e.pointerId) { move(node,dragging.x+e.clientX-dragging.startX,dragging.y+e.clientY-dragging.startY); e.preventDefault(); } });
+    handle.addEventListener('pointerup', e => { if (dragging?.handle === handle && dragging.id === e.pointerId) finishDrag(); });
+    handle.addEventListener('pointercancel', () => finishDrag(true));
+    handle.addEventListener('lostpointercapture', () => finishDrag());
+    handle.addEventListener('keydown', e => {
+      if (e.target !== handle || e.altKey || e.ctrlKey || e.metaKey) return;
+      if (e.key === 'Escape' && dragging) { finishDrag(true); e.preventDefault(); return; }
+      if (e.key === 'Home') { position = null; fit(); savePosition(); e.preventDefault(); return; }
+      const delta = {ArrowLeft:[-1,0],ArrowRight:[1,0],ArrowUp:[0,-1],ArrowDown:[0,1]}[e.key];
+      if (!delta) return;
+      const r = node.getBoundingClientRect(), step = e.shiftKey ? 50 : 10;
+      move(node,r.left+delta[0]*step,r.top+delta[1]*step); savePosition(); e.preventDefault();
+    });
+  }
+  function buildLauncher() {
+    if (launcher?.isConnected) return;
+    launcher = el('div'); launcher.id = 'job-screen-launcher';
+    launcher.style.cssText = 'position:fixed;right:20px;bottom:20px;z-index:2147483646;max-width:calc(100vw - 16px);display:none;';
+    const shadow = launcher.attachShadow({mode:'closed'}), style = el('style');
+    style.textContent = ':host{all:initial}*{box-sizing:border-box}.mini{display:flex;align-items:center;gap:4px;background:#f7f3ff;border:1px solid #d9cef0;border-radius:14px;padding:5px;box-shadow:0 8px 30px #30205226;font:13px/1.6 system-ui,"Microsoft YaHei",sans-serif}button{font:inherit;border:0;border-radius:9px;background:transparent;color:#6546a4;padding:6px 10px;cursor:pointer}button:hover{background:#ede5fb}button:focus-visible{outline:2px solid #8d70d0;outline-offset:2px}.grip{cursor:grab;touch-action:none;user-select:none;padding:6px}.dragging{cursor:grabbing}';
+    const box = el('div',undefined,'mini'), grip = button('⠿','move',() => {}); grip.className = 'grip'; grip.setAttribute('aria-label','移动展开按钮');
+    launcherButton = button('展开助手','expand',() => { show({...binding,collapsed:false,position}); panel.querySelector('header').focus({preventScroll:true}); send('expand'); });
+    box.append(grip,launcherButton); shadow.append(style,box); document.documentElement.append(launcher); movable(grip,launcher);
+  }
+  function collapse(focus = true) {
+    if (!host) return;
+    host.style.display = 'none'; buildLauncher(); launcher.style.display = 'block';
+    launcherButton.textContent = current.busy ? '助手检索中 · 展开' : '展开助手'; fit(); if (focus) launcherButton.focus({preventScroll:true});
+  }
   function build() {
     renderedRows = new Map(); listSignature = '';
     host = el('div'); host.id = 'job-screen-widget'; host.style.cssText = 'position:fixed;right:20px;bottom:20px;z-index:2147483646;width:min(370px,calc(100vw - 28px));display:block;';
@@ -29,7 +93,11 @@
     style.textContent = ':host{all:initial}*{box-sizing:border-box}section{font:13px/1.7 system-ui,"Microsoft YaHei",sans-serif;color:#39334f;background:linear-gradient(145deg,#fff,#f7f4ff);border:1px solid #e3dcf3;border-radius:20px;box-shadow:0 15px 65px #30205226;max-height:calc(100vh - 40px);overflow:auto;padding:18px}header{display:flex;gap:10px;align-items:center}h2{font-size:15px;margin:0;flex:1}small{color:#807393}p{margin:8px 0}button{border:1px solid #e4dcf4;background:#f3effc;border-radius:9px;padding:7px 10px;color:#7053b6;font:inherit;cursor:pointer}button:hover{background:#eae1fc}button:disabled{opacity:.5;cursor:default}.close{border:0;font-size:22px;padding:0 8px;background:transparent}.actions{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0}.primary{background:#7460c7;color:white;border-color:#7460c7}label{display:block;font-size:12px;color:#776a8c}input,select{width:100%;border:1px solid #ded6ed;background:white;border-radius:9px;padding:9px;font:inherit;color:#39334f;margin:4px 0}ol{list-style:none;margin:0;padding:0}li{background:#ffffffbd;border:1px solid #ebe5f5;border-radius:12px;margin:8px 0;padding:10px}.job-name{font-weight:650;text-align:left;background:none;border:0;padding:0;color:#40345b}.job-meta{font-size:11px;color:#8d7c9c}.major{font-size:12px;font-weight:650;color:#6545b4}.row-actions{display:flex;gap:12px;align-items:center;font-size:11px;margin-top:7px}.row-actions button{font-size:11px;padding:3px 8px}a{color:#796298;text-decoration:none}.status{font-size:12px;color:#8c759c;overflow-wrap:anywhere}.count{font-size:12px;color:#76638e;background:#eee8fa;border-radius:9px;padding:8px}.note{font-size:11px;color:#9c8daa}.danger{color:#a36683;background:#fbf1f6}.empty{font-size:12px;color:#9b8ca9;padding:15px 0}.degree-filter{display:flex;align-items:center;gap:6px;margin:7px 0}.degree-filter input{width:auto;margin:0}.conflict-reason{font-size:11px;color:#ad5c74;margin-top:5px}select{margin:4px 0}.original-job-button{display:inline-flex;align-items:center;justify-content:center;border:1px solid #d8cdf4;border-radius:8px;padding:3px 9px;background:#f0ebff;color:#6047aa;font-size:11px;font-weight:650}.original-job-button:hover{background:#e6ddfc}.major.missing{color:#a07124;background:#fff4dc;border:1px solid #f2dfb7;border-radius:7px;padding:4px 7px;margin:6px 0;display:inline-block}[hidden]{display:none!important}';
     panel = el('section'); panel.setAttribute('aria-label', '岗位筛选小窗');
     const head = el('header'); head.append(el('h2', '岗位筛选助手'));
-    const close = button('×', 'hide', () => { hide(); send('hide'); }); close.className = 'close'; close.setAttribute('aria-label', '收起小窗，任务继续'); head.append(close);
+    const shrink = button('收起助手','collapse',() => { collapse(); send('collapse'); }); shrink.title = '收起成浮动按钮，任务继续'; head.append(shrink);
+    const close = button('×', 'hide', () => { hide(); send('hide'); }); close.className = 'close'; close.setAttribute('aria-label', '隐藏小窗，任务继续'); head.append(close);
+    close.title = '隐藏小窗，任务继续；从工具栏重新打开';
+    style.textContent += 'header{cursor:grab;touch-action:none;user-select:none}header.dragging{cursor:grabbing}header:focus-visible{outline:2px solid #8d70d0;outline-offset:4px;border-radius:9px}header button[data-action=collapse]{font-size:11px;padding:5px 8px;white-space:nowrap}';
+    movable(head,host);
     const source = el('small', ''); source.id = 'source'; panel.append(head, source);
     const label = el('label', '专业检索词'); search = el('input'); search.placeholder = '例如 电气、电子信息'; search.setAttribute('aria-label', '专业检索词'); label.append(search);
     search.onchange = () => send('search', { query: search.value }); panel.append(label);
@@ -43,19 +111,22 @@
     resume.textContent = '继续本次采集'; resume.className = 'primary'; restart = button('重新开始并清空进度', 'restart'); restart.title = '清空本轮进度，从原招聘页当前所在页开始';
     clear = button('结束并清空', 'clear'); clear.className = 'danger'; const full = button('打开总筛选台 ↗', 'focus'); authorize = button('授权详情站点 ↗', 'focus'); authorize.hidden = true; actions.append(start, pause, resume, restart, authorize, full, clear); panel.append(actions);
     count = el('p', '尚未开始', 'count'); message = el('p', '当前网站独立检索，专业与其他条件可在总台设置。', 'status'); message.setAttribute('role', 'status'); list = el('ol');
-    panel.append(count, message, list, el('p', '× 只收起小窗；请保持总筛选台打开。收藏长期保存，其他结果仅属于本轮会话。', 'note'));
+    panel.append(count, message, list, el('p', '拖动标题栏移动；“收起助手”保留展开按钮，× 隐藏小窗，任务继续。请保持总筛选台打开。', 'note'));
     shadow.append(style, panel); document.documentElement.append(host);
+    sizeObserver?.disconnect(); sizeObserver = new ResizeObserver(fit); sizeObserver.observe(panel);
   }
   function render(state) {
     if (!panel) return;
     if (state?.epoch && (state.epoch < epochFloor || state.epoch < (current.epoch || 0) || state.epoch === current.epoch && state.revision < current.revision)) return;
     if (state?.ended) epochFloor = Math.max(epochFloor, (current.epoch || 0) + 1);
     current = state || {};
+    if (launcherButton) launcherButton.textContent = current.busy ? '助手检索中 · 展开' : '展开助手';
     count.textContent = '已发现 ' + (current.total || 0) + ' · 筛选后 ' + (current.count || 0) + ' · 已读详情 ' + (current.read || 0);
     message.textContent = current.message || '尚未开始'; start.disabled = Boolean(current.busy || current.clearing || current.hasProgress || current.connectionLost); start.hidden = Boolean(current.resumable); pause.hidden = !current.busy; resume.hidden = current.busy || !current.resumable; resume.disabled = Boolean(current.connectionLost); clear.disabled = !current.total && !current.busy;
     restart.hidden = !current.hasProgress; restart.disabled = Boolean(current.busy || current.clearing || current.connectionLost);
     authorize.hidden = !current.needsPermission; degree.value = current.degree || ''; hideDegree.checked = Boolean(current.hideDegreeConflicts); speed.value = current.speed === 'fast' ? 'fast' : 'steady'; speed.disabled = Boolean(current.busy || current.clearing);
     if (document.activeElement !== host && search.value !== (current.query || '')) search.value = current.query || '';
+    if (host.style.display === 'none') return;
     const signature = JSON.stringify([current.total || 0, current.count || 0, current.jobs || []]);
     if (signature === listSignature) return;
     listSignature = signature; const nextRows = new Map(), children = [];
@@ -75,8 +146,17 @@
     else children.push(el('li', '已显示当前筛选的全部 ' + current.count + ' 条结果，可在小窗内滚动查看。', 'note'));
     list.replaceChildren(...children); renderedRows = nextRows;
   }
-  function show(data) { if (binding && binding.nonce !== data.nonce) { current = {}; epochFloor = 0; } binding = data; if (!host?.isConnected) build(); host.style.display = 'block'; panel.querySelector('#source').textContent = new URL(data.url).hostname + ' · 仅控制当前网站'; render(current); clearInterval(pollTimer); pollTimer = setInterval(poll, 4000); poll(); }
-  function hide() { if (host) host.style.display = 'none'; clearInterval(pollTimer); }
+  function show(data) {
+    if (binding && binding.nonce !== data.nonce) { current = {}; epochFloor = 0; position = null; }
+    if (Object.hasOwn(data,'position')) position = validPosition(data.position);
+    binding = data; if (!host?.isConnected) build(); host.style.display = 'block';
+    if (launcher) launcher.style.display = 'none';
+    panel.querySelector('#source').textContent = new URL(data.url).hostname + ' · 仅控制当前网站';
+    if (data.collapsed) collapse(false);
+    render(current); fit(); clearInterval(pollTimer); pollTimer = setInterval(poll,4000); poll();
+  }
+  function hide() { if (host) host.style.display = 'none'; if (launcher) launcher.style.display = 'none'; clearInterval(pollTimer); }
+  root.addEventListener('resize',() => { fit(); if (position) savePosition(); });
   chrome.runtime.onMessage.addListener((value, sender) => { if (sender.id === chrome.runtime.id && value?.type === 'job-widget-state' && value.nonce === binding?.nonce) render(value.state); });
   root.JobScreenWidget = { show, hide };
 })(globalThis);

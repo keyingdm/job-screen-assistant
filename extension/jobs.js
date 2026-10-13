@@ -92,10 +92,10 @@
   function professionalData(job) {
     const query = filters.major || profile.major, search = J.matchMajor(job, query, profile), qualification = profile.major ? J.majors.assess(job, profile) : null;
     const matched = search.hit || search.state === 'range' || ['exact', 'category', 'broad'].includes(qualification?.kind);
-    const stateLabel = { pending: '详情待读，专业尚未核对', reading: '正在读取详情', failed: '详情读取失败，专业尚未核对' }[job.collectionState];
+    const stateLabel = job.detailStatus === 'unresolved' ? '详情入口未识别，专业尚未读取' : job.detailStatus === 'body-incomplete' ? '详情正文未读完整，专业尚未核对' : { pending: '详情待读，专业尚未核对', reading: '正在读取详情', failed: '详情读取失败，专业尚未核对' }[job.collectionState];
     const label = !search.known ? stateLabel || '未检测到专业要求' : filters.major ? search.label : qualification ? ({ exact: '专业名称匹配', category: '专业类别匹配 · 待核对', broad: '宽泛范围匹配 · 待核对', unrestricted: '专业不限', excluded: '专业明确冲突', different: '专业未直接匹配', unknown: '专业待确认' }[qualification.kind]) : '已提取专业条款';
     const primary = search.fragments?.join(' / ') || (matched ? qualification?.evidence || search.evidence : '');
-    return { search, qualification, label, matched, primary, evidence: search.evidence || stateLabel || '未检测到专业要求；请查看原岗位核对。', missing: label === '未检测到专业要求', query };
+    return { search, qualification, label, matched, primary, evidence: search.evidence || (stateLabel && job.collectionError ? job.collectionError : stateLabel) || '未检测到专业要求；请查看原岗位核对。', missing: label === '未检测到专业要求' || job.detailStatus === 'unresolved' || job.detailStatus === 'body-incomplete', query };
   }
   function highlighted(value, query) {
     const span = node('span'); const words = J.terms(query).filter(Boolean).sort((a, b) => b.length - a.length);
@@ -150,17 +150,25 @@
     for (const j of d.jobs) counts[j.collectionState === 'reading' ? 'pending' : j.collectionState] = (counts[j.collectionState === 'reading' ? 'pending' : j.collectionState] || 0) + 1;
     $('coverage').textContent = '已读 ' + d.pages + ' 页/批 · 已发现 ' + d.jobs.length + (d.total === null ? ' 个岗位' : ' / 页面报告 ' + d.total + ' 个岗位') +
       ' · 要求完整 ' + counts.read + ' · 待读 ' + counts.pending + ' · 不完整 ' + counts.missing + ' · 失败 ' + counts.failed +
-      '。' + (d.complete ? '与页面报告数量一致；范围为当前筛选列表。' : d.startedMidList ? '从中间页开始，未覆盖前面的分页。' : '全列表覆盖情况尚未确认。') + (d.stopReason ? ' ' + d.stopReason : '');
+      '。' + (d.duplicates ? '合并来源已去除 ' + d.duplicates + ' 个有相同编号或链接的重复岗位；来源总数不能直接相加。' : d.complete ? '与页面报告数量一致；范围为当前筛选列表。' : d.startedMidList ? '从中间页开始，未覆盖前面的分页。' : '全列表覆盖情况尚未确认。') + (d.stopReason ? ' ' + d.stopReason : '');
   }
   function render() {
     dataset = tasks.aggregate(selectedTask); const task = activeTask(); busy = Boolean(task?.busy || task?.starting); source = task?.source || null; rule = task?.rule || {}; ruleKey = task?.ruleKey || '';
-    const jobs = allJobs(), all = jobs.map(j => J.evaluate(j, profile));
+    const jobs = allJobs();
+    rows = J.filter(jobs, profile, filters, marks(), Date.now());
     $('favorites-count').textContent = Object.keys(favorites).length; $('session-count').textContent = tasks.aggregate('all')?.jobs.length || 0;
     for (const name of ['favorites', 'session']) { const el = $('tab-' + name); el.classList.toggle('active', mode === name); el.setAttribute('aria-selected', String(mode === name)); }
     for (const name of ['table', 'cards']) { const el = $('view-' + name); el.classList.toggle('active', view === name); el.setAttribute('aria-pressed', String(view === name)); }
-    $('stats').replaceChildren(...[['', jobs.length, mode === 'favorites' ? '已收藏岗位' : '本次发现岗位'], ['pass', all.filter(v => v.state === 'pass').length, '所选条件未见冲突'], ['review', all.filter(v => v.state === 'review').length, '待确认'], ['fail', all.filter(v => v.state === 'fail').length, '存在明确冲突']].map(([cls, n, label]) => { const el = node('div', 'stat ' + cls); el.append(node('strong', '', n), node('span', '', label)); return el; }));
-    rows = J.filter(jobs, profile, filters, marks()); const pages = Math.max(1, Math.ceil(rows.length / 25)); page = Math.max(1, Math.min(page, pages));
-    $('result-count').textContent = '当前显示 ' + rows.length + ' / ' + jobs.length + ' 个岗位 · ' + (mode === 'favorites' ? '收藏包含原文与链接，状态由你手动记录。' : '未收藏的结果关闭或刷新后清空。');
+    $('stats').replaceChildren(...[['', rows.length, '当前筛选岗位'], ['pass', rows.filter(v => v.match.state === 'pass').length, '所选条件未见冲突'], ['review', rows.filter(v => v.match.state === 'review').length, '待确认'], ['fail', rows.filter(v => v.match.state === 'fail').length, '存在明确冲突']].map(([cls, n, label]) => {
+      const el = node('div', 'stat ' + cls); el.append(node('strong', '', n), node('span', '', label));
+      el.setAttribute('role','button'); el.tabIndex = 0; el.setAttribute('aria-label','查看' + label + '，当前筛选中 ' + n + ' 个');
+      el.title = '统计当前筛选结果，涵盖全部结果分页；点击查看对应岗位。全部发现 ' + jobs.length + ' 个。';
+      const pick = () => { filters.state = filters.state === cls ? '' : cls; restore(); controls(); page = 1; render(); };
+      el.onclick = pick; el.onkeydown = e => { if (['Enter',' '].includes(e.key)) { e.preventDefault(); pick(); } }; return el;
+    }));
+    const pages = Math.max(1, Math.ceil(rows.length / 25)); page = Math.max(1, Math.min(page, pages));
+    $('result-count').textContent = '当前筛选 ' + rows.length + ' / 全部发现 ' + jobs.length + ' 个岗位 · 本页 ' + (rows.length ? (page - 1) * 25 + 1 : 0) + '–' + Math.min(page * 25, rows.length) + ' 条 · ' + (mode === 'favorites' ? '收藏包含原文与链接，状态由你手动记录。' : '未收藏的结果关闭或刷新后清空。');
+    $('session-count').title = '本轮所有来源合计；统计卡和下方结果按当前选择的来源统计。';
     $('major-result-count').hidden = !J.terms(filters.major).length;
     $('major-result-count').textContent = '当前结果的专业检索：命中 ' + rows.filter(r => r.major.hit).length + ' · 不限 ' + rows.filter(r => r.major.state === 'unrestricted').length + ' · 待确认 ' + rows.filter(r => !r.major.hit && r.major.state !== 'unrestricted').length + '。检索命中不代表符合专业资格。';
     const person = J.majors.lookup(profile.major);
@@ -276,19 +284,21 @@
   }
   async function runStartTask(task, resume = false) {
     if (!task || task.busy || task.starting || task.clearing) return;
-    const token = {}; task.startToken = token; task.starting = true; render();
+    const token = {}; task.startToken = token; task.starting = true; if (selectedTask === task.id) status('正在准备当前来源的采集。'); render();
     try {
       const context = await rpc('context', {}, task), origin = new URL(context.url).origin;
+      if (resume && task.dataset?.scopeURL && task.dataset.scopeURL !== (context.scopeURL || P.listScope(context.url))) { task.dataset.scopeChanged = true; task.dataset.complete = false; throw Error('原网页筛选范围已变化，已有结果保留。请重新开始并清空进度，避免混入旧范围岗位。'); }
       if (!await chrome.permissions.contains({ origins: [origin + '/*'] })) throw Error('未获得当前网站访问权限，请点击开始采集并允许。');
       if (task.startToken !== token) return;
       if (!resume) { task.source = context; task.ruleKey = origin + new URL(context.url).pathname; task.rule = (await Store.get('jobRules', {}))[task.ruleKey] || {}; }
       if (task.startToken !== token) return;
       const access = await rpc('access-begin', { resume, speed: task.speed }, task); task.ticket = access.ticket;
       if (task.startToken !== token) { await rpc('close-worker', {}, task).catch(() => {}); return; }
-      await tasks.run(task, { read: () => rpc('scan', { rule: task.rule, expand: true }, task), next: () => rpc('advance', { rule: task.rule }, task),
-        resolveLink: selector => rpc('resolve', { selector }, task), readDetail: (url, signal) => readDetail(url, signal, task),
+      const running = tasks.run(task, { read: () => rpc('scan', { rule: task.rule, expand: true }, task), next: () => rpc('advance', { rule: task.rule }, task),
+        resolveLink: (selector, raw) => rpc('resolve', { selector, expectedName: raw.name, expectedRecordId: raw.recordId, rule: task.rule }, task), readDetail: (url, signal) => readDetail(url, signal, task),
         delay: 0,
         cleanup: async () => { await rpc('close-worker', {}, task).catch(() => {}); await completeFavorites(task); } }, resume);
+      if (selectedTask === task.id) status(task.message); await running;
     } catch (e) { task.message = JobScreenAccess.read(e)?.reason || e.message; }
     finally { if (task.startToken === token) { task.starting = false; task.startToken = null; } if (selectedTask === task.id) status(task.message); render(); }
   }

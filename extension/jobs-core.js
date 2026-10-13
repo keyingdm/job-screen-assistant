@@ -10,7 +10,8 @@
   function clauses(value) { return text(value).split(/[\n；;。]+/).map(v => v.replace(/^\s*\d+[、.．）)]\s*/, '').trim()).filter(Boolean); }
   const matchMajor = Majors.match;
   function degreeInfo(value) {
-    const parts = clauses(value).flatMap(v => v.split(/[，,]/)).filter(v => /专科|大专|高职|本科|学士|硕士|博士|研究生/.test(v));
+    const parts = clauses(value).flatMap(v => v.split(/[，,]/)).filter(v => /专科|大专|高职|本科|学士|硕士|博士|研究生/.test(v))
+      .filter(v => !(/英语|CET|[四六]级/i.test(v) && !/学历|学位|及以上|或以上|不低于|至少|仅限|只招/.test(v)));
     const hard = parts.filter(v => !preferred(v) && !/在读|毕业时间/.test(v));
     const evidence = hard.join('；');
     if (!hard.length) return { label: /学历不限|不限学历/.test(value) ? '学历不限' : '未明确', rank: 0, evidence: parts.join('；'), unrestricted: /学历不限|不限学历/.test(value) };
@@ -42,12 +43,22 @@
     const clearNone = /经验不限|不限经验|无.{0,3}经验要求|无需.{0,3}经验/.test(value);
     return { min: required.length ? Math.max(...required.map(v => v.min)) : null, uncertain: required.some(v => v.uncertain), evidence: required.map(v => v.evidence).join('；'), preferences: preferences.map(v => v.evidence).join('；'), clearNone };
   }
-  function englishInfo(value) {
-    const parts = clauses(value).flatMap(v => v.split(/[，,]/)).filter(v => /英语|CET|雅思|托福/i.test(v));
+  function englishInfo(value, degree = '') {
+    const parts = clauses(value).flatMap(v => v.split(/[，,]/)).filter(v => /英语|CET|雅思|托福/i.test(v) || /(?:本科|学士|硕士|博士|研究生|专科|大专).{0,18}[四六]级/.test(v));
     const hard = parts.filter(v => !preferred(v));
-    const evidence = hard.join('；');
+    let evidence = hard.join('；'), scoped = false;
+    const branches = hard.flatMap(part => {
+      const markers = [...part.matchAll(/博士研究生|硕士研究生|专科|大专|高职|本科|学士|硕士|博士|研究生/g)];
+      return markers.map((m,i) => ({degree:degreeRank(m[0]),text:part.slice(m.index,markers[i+1]?.index)})).filter(b => /四级|六级|CET\s*[-—]?\s*[46]/i.test(b.text) && !/^[^）)]*[）)]\s*[/、]/.test(b.text));
+    });
+    if (branches.length) {
+      const rank = degreeRank(degree), selected = rank && branches.filter(b => b.degree === rank || /及以上|或以上|不低于/.test(b.text) && rank > b.degree);
+      if (!selected?.length) return {rank:0,evidence,uncertain:true};
+      const generic = hard.filter(part => !/专科|大专|高职|本科|学士|硕士|博士|研究生/.test(part));
+      evidence = selected.map(b=>b.text.replace(/[（(]\s*$/,'').trim()).concat(generic).join('；'); scoped = true;
+    }
     const rank = /六级|CET\s*[-—]?\s*6/i.test(evidence) ? 2 : /四级|CET\s*[-—]?\s*4/i.test(evidence) ? 1 : 0;
-    return { rank, evidence, uncertain: /或|雅思|托福|\d{3}\s*分/.test(evidence) || (!rank && Boolean(evidence)) };
+    return { rank, evidence, uncertain: /或|雅思|托福|\d{3}\s*分/.test(evidence) || (!rank && Boolean(evidence)) || !scoped && /(?:四级|六级)\s*[（(](?:本科|硕士|博士)/.test(evidence) };
   }
   function deadline(value) {
     const match = text(value).match(/(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
@@ -71,6 +82,7 @@
     job.sourceURL = safeURL(raw.sourceURL); job.sourceLabel = text(raw.sourceLabel);
     if (job.sourceURL) job.key = `${source}:${new URL(job.sourceURL).origin}:${id || url || job.name}`;
     job.majorRequirements = text(raw.majorRequirements);
+    job.recordId = text(raw.recordId); job.identityKind = text(raw.identityKind); job.detailStatus = text(raw.detailStatus);
     job.collectionState = text(raw.collectionState) || (requirements ? 'read' : 'pending'); job.collectionError = text(raw.collectionError); job.linkKind = text(raw.linkKind) || (url ? 'detail' : 'list');
     job.facts = { degree: degreeInfo(requirements), graduation: graduationInfo(requirements), experience: experienceInfo(requirements), english: englishInfo(requirements), major: Majors.extract(job).evidence, other: clauses(requirements).filter(v => /资格|证书|职称|党员|政治|年龄|岁|全日制|双一流|985|211|院校|户籍|生源/.test(v)).join('；') };
     job.tags = ['出差', '驻场', '驻点', '倒班', '夜班', '轮班', '加班', '外派', '销售', '实习'].filter(v => `${requirements}\n${description}\n${job.name}\n${job.nature}`.includes(v));
@@ -104,7 +116,7 @@
       else add('工作经验', Number(profile.experience) >= e.min ? 'pass' : 'fail', `原文至少要求 ${e.min} 年相关经验；年限足够仍需核对经历方向`, e.evidence);
     }
     if (profile.english !== '' && profile.english !== undefined) {
-      const e = f.english;
+      const e = englishInfo(job.requirements,profile.degree);
       if (!e.rank || e.uncertain) add('英语', 'review', '英语条件未明确或含分数、替代考试', e.evidence);
       else add('英语', Number(profile.english) >= e.rank ? 'pass' : 'fail', `原文要求英语${e.rank === 2 ? '六' : '四'}级`, e.evidence);
     }

@@ -16,7 +16,7 @@ chrome.tabs.onRemoved.addListener(async tabId => {
   }
   const owners = Object.keys(data).filter(key => key.startsWith('jobOwner:') && key.endsWith(':' + tabId));
   for (const key of owners) JobScreenChannel.cancelReaders(Number(key.split(':')[1]), tabId);
-  await chrome.storage.session.remove(['jobBinding:' + tabId, 'jobWidget:' + tabId, 'jobWorker:' + tabId, ...owners]);
+  await chrome.storage.session.remove(['jobBinding:' + tabId, 'jobWidget:' + tabId, 'jobWidgetPosition:' + tabId, 'jobWorker:' + tabId, ...owners]);
 });
 async function inspect(tabId, rule, expand = false, detailOnly = false, access = null) {
   if (access) JobScreenAccessBackground.current(access.owner, access.source, access.ticket);
@@ -34,12 +34,25 @@ async function settled(tabId, origin, rule, previous, detailOnly = false, access
     if (tab.url && !tab.url.startsWith('about:') && new URL(tab.url).origin !== origin) throw JobScreenAccess.error(JobScreenAccess.record('cancelled', '页面跳转到其他网站，已停止；请在新页面重新打开插件。'));
     if (tab.status === 'complete') try {
       const r = await inspect(tabId, rule, true, detailOnly, access);
-      if (r?.jobs.length && (!previous || r.signature !== previous)) { if (detailOnly && r.jobs[0]?.completeness === 'detail-summary') partial = r; else return r; }
+      if (r?.jobs.length && (!previous || r.signature !== previous)) { if (detailOnly && ['detail-summary','detail-missing'].includes(r.jobs[0]?.completeness)) partial = r; else return r; }
     } catch (e) { if (JobScreenAccess.read(e)) throw e; }
     await new Promise(resolve => setTimeout(resolve, 400));
   }
-  if (partial) return partial;
+  if (partial) {
+    // A visible title and responsibilities prove that a body was read, even if qualifications are absent.
+    partial.jobs = partial.jobs.map(j=>({...j,detailStatus:j.name&&j.description?'loaded':'body-incomplete'}));
+    return partial;
+  }
   throw Error('页面加载超时或翻页后内容未变化。当前结果保留，可暂停后重试。');
+}
+async function waitURL(tabId, expected) {
+  const until = Date.now() + 16000;
+  while (Date.now() < until) {
+    const tab = await chrome.tabs.get(tabId);
+    if (tab.url === expected && tab.status === 'complete' && !tab.pendingUrl) return tab;
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+  throw Error('岗位入口跳转未完成，请回到原列表后继续。');
 }
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (message?.type !== 'job-screen') return;
@@ -63,7 +76,15 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     const tab = await chrome.tabs.get(tabId);
     if (!/^https?:\/\//.test(tab.url || '') || new URL(tab.url).origin !== binding.origin) throw JobScreenAccess.error(JobScreenAccess.record('cancelled', '原标签页已切换网站，任务已停止；请在新页面重新打开插件'));
     accessOrigin = binding.origin;
-    if (message.action === 'context') return { url: tab.url, title: tab.title };
+    if (message.action === 'context') {
+      let scopeURL;
+      if (await chrome.permissions.contains({origins:[binding.origin + '/*']})) {
+        await chrome.scripting.executeScript({target:{tabId},files:['jobs-page.js']});
+        const result = await chrome.scripting.executeScript({target:{tabId},func:()=>JobScreenPage.listScope(location.href,document)});
+        scopeURL = result[0]?.result;
+      }
+      return { url: tab.url, title: tab.title, scopeURL };
+    }
     if (message.action === 'access-begin') return JobScreenAccessBackground.begin(ownerId, tabId, binding.origin, Boolean(message.resume), message.speed);
     if (message.action === 'access-permit') { accessOrigin = await JobScreenAccessBackground.target(binding.origin, message.url); return JobScreenAccessBackground.permit(ownerId, tabId, message.ticket, message.url); }
     if (message.action === 'access-report') { accessOrigin = await JobScreenAccessBackground.target(binding.origin, message.url); if (!['rate', 'refused', 'captcha'].includes(message.stop?.kind)) throw Error('访问限制类型无效'); throw JobScreenAccess.error(message.stop); }
@@ -87,17 +108,41 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     }
     if (message.action === 'resolve') {
       await JobScreenAccessBackground.permit(ownerId, tabId, access.ticket);
-      const out = await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: async css => {
+      const before = tab.url; let navigation = '', out;
+      const observe = (id, change) => { if (id === tabId && change.url && change.url !== before) navigation = change.url; };
+      chrome.tabs.onUpdated.addListener(observe);
+      try { out = await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: async (css, expected, expectedID) => {
         const el = document.querySelector(css);
-        if (!el || /申请|投递|登录|注册|提交/.test(el.textContent.trim())) return '';
+        if (!el || /^(?:立即)?(?:申请|投递|登录|注册|提交)(?:岗位|职位|简历)?[\s↗]*$/.test(el.textContent.trim())) return '';
+        if (expected && !el.textContent.trim().includes(expected)) throw Error('岗位标题已变化，未点击不匹配的入口。');
+        if (expectedID && ![el.id,...['job','post','position','vacancy','requisition'].map(k=>el.getAttribute('data-'+k+'-id'))].includes(expectedID)) throw Error('岗位编号已变化，未点击不匹配的入口。');
         const original = window.open, before = location.href; let captured = '';
-        window.open = url => { try { captured = new URL(url, location.href).href; } catch {} return null; };
-        try { el.click(); if (!captured) await new Promise(resolve => setTimeout(resolve, 250)); } finally { window.open = original; }
-        return { url: captured, navigated: location.href !== before };
-      }, args: [String(message.selector || '').slice(0, 1500)] });
-      const r = out[0]?.result;
-      if (r?.navigated) { await chrome.tabs.goBack(tabId).catch(() => {}); throw Error('标题在原页跳转，未识别独立详情链接。'); }
-      if (!r?.url) return ''; const resolved = new URL(r.url); return /^https?:$/.test(resolved.protocol) && !resolved.username && !resolved.password ? resolved.href : '';
+        window.open = url => { try { captured = new URL(url, location.href).href; } catch {} return {focus(){},closed:false}; };
+        try { el.click(); if (!captured) await new Promise(resolve => setTimeout(resolve, 1000)); } finally { window.open = original; }
+        return { url: captured, navigated: location.href !== before, location: location.href };
+      }, args: [String(message.selector || '').slice(0, 1500),String(message.expectedName || '').slice(0,100),String(message.expectedRecordId || '').slice(0,120)] });
+      } catch (e) {
+        // A navigating script may disappear before tabs.url reflects its destination.
+        for (let i = 0; i < 10 && !navigation; i++) {
+          const current = await chrome.tabs.get(tabId);
+          navigation = current.pendingUrl && current.pendingUrl !== before ? current.pendingUrl : current.url !== before ? current.url : '';
+          if (!navigation) await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        if (!navigation) throw e;
+      }
+      finally { chrome.tabs.onUpdated.removeListener(observe); }
+      const r = out?.[0]?.result; let after = await chrome.tabs.get(tabId);
+      const target = r?.url || (after.pendingUrl && after.pendingUrl !== before ? after.pendingUrl : after.url !== before ? after.url : navigation);
+      if (!r?.url && target && (after.url !== before || after.pendingUrl || navigation)) after = await waitURL(tabId, target);
+      if (after.url !== before) {
+        await JobScreenAccessBackground.permit(ownerId, tabId, access.ticket, before);
+        await chrome.tabs.goBack(tabId);
+        await waitURL(tabId, before);
+        const restored = await settled(tabId, binding.origin, message.rule || {}, null, false, access);
+        if (restored.kind !== 'list') throw Error('详情入口跳转后未恢复原列表，已停止；请回到原列表后继续。');
+      }
+      if (!target) return '';
+      const resolved = new URL(target); return /^https?:$/.test(resolved.protocol) && !resolved.username && !resolved.password ? resolved.href : '';
     }
     const url = new URL(message.url);
     if (!/^https?:$/.test(url.protocol) || url.username || url.password) throw Error('详情链接无效');
