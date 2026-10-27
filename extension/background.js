@@ -27,14 +27,15 @@ async function inspect(tabId, rule, expand = false, detailOnly = false, access =
   } : null), args: [rule || {}, expand, detailOnly, access] });
   return out[0]?.result;
 }
-async function settled(tabId, origin, rule, previous, detailOnly = false, access = null) {
+async function settled(tabId, origin, rule, previous, detailOnly = false, access = null, expected = null) {
   const until = Date.now() + 16000; let partial;
   while (Date.now() < until) {
     const tab = await chrome.tabs.get(tabId);
     if (tab.url && !tab.url.startsWith('about:') && new URL(tab.url).origin !== origin) throw JobScreenAccess.error(JobScreenAccess.record('cancelled', '页面跳转到其他网站，已停止；请在新页面重新打开插件。'));
     if (tab.status === 'complete') try {
-      const r = await inspect(tabId, rule, true, detailOnly, access);
-      if (r?.jobs.length && (!previous || r.signature !== previous)) { if (detailOnly && ['detail-summary','detail-missing'].includes(r.jobs[0]?.completeness)) partial = r; else return r; }
+      const r = await inspect(tabId, rule, !expected, detailOnly, access);
+      const matches = !expected || (r?.kind === expected.kind && r.scopeURL === expected.scopeURL && r.signature === expected.signature);
+      if (matches && r?.jobs.length && (!previous || r.signature !== previous)) { if (detailOnly && ['detail-summary','detail-missing'].includes(r.jobs[0]?.completeness)) partial = r; else return r; }
     } catch (e) { if (JobScreenAccess.read(e)) throw e; }
     await new Promise(resolve => setTimeout(resolve, 400));
   }
@@ -53,6 +54,18 @@ async function waitURL(tabId, expected) {
     await new Promise(resolve => setTimeout(resolve, 200));
   }
   throw Error('岗位入口跳转未完成，请回到原列表后继续。');
+}
+async function resetReader(tabId) {
+  // about:blank has no granted host, so tabs.url can be omitted. Observe its actual load cycle.
+  return new Promise((resolve, reject) => {
+    let loading = false;
+    const finish = error => { clearTimeout(timer); chrome.tabs.onUpdated.removeListener(updated); chrome.tabs.onRemoved.removeListener(removed); error ? reject(error) : resolve(); };
+    const updated = (id, change) => { if (id !== tabId) return; if (change.status === 'loading') loading = true; if (loading && change.status === 'complete') finish(); };
+    const removed = id => { if (id === tabId) finish(Error('详情读取已结束')); };
+    const timer = setTimeout(() => finish(Error('详情阅读页重置超时，请暂停后重试。')), 16000);
+    chrome.tabs.onUpdated.addListener(updated); chrome.tabs.onRemoved.addListener(removed);
+    chrome.tabs.update(tabId, { url: 'about:blank', active: false }).catch(finish);
+  });
 }
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (message?.type !== 'job-screen') return;
@@ -108,7 +121,13 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     }
     if (message.action === 'resolve') {
       await JobScreenAccessBackground.permit(ownerId, tabId, access.ticket);
-      const before = tab.url; let navigation = '', out;
+      const originalList = await inspect(tabId, message.rule || {}, false, false, access);
+      if (originalList?.kind !== 'list') throw Error('原页面已不是岗位列表，请回到原列表后继续。');
+      const candidates = originalList.jobs.filter(j => message.expectedIdentity ? j.id === message.expectedIdentity : message.expectedRecordId ? j.recordId === message.expectedRecordId : message.expectedName && j.name === message.expectedName);
+      if (message.expectedIdentity && candidates.length !== 1) throw Error('原列表中的岗位身份已变化，请核对后继续。');
+      // SPA restoration can recreate IDs and wrappers while retaining the same jobs.
+      const currentSelector = candidates.length === 1 && candidates[0].titleSelector || message.selector;
+      const before = originalList.url; let navigation = '', out;
       const observe = (id, change) => { if (id === tabId && change.url && change.url !== before) navigation = change.url; };
       chrome.tabs.onUpdated.addListener(observe);
       try { out = await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: async (css, expected, expectedID) => {
@@ -120,7 +139,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         window.open = url => { try { captured = new URL(url, location.href).href; } catch {} return {focus(){},closed:false}; };
         try { el.click(); if (!captured) await new Promise(resolve => setTimeout(resolve, 1000)); } finally { window.open = original; }
         return { url: captured, navigated: location.href !== before, location: location.href };
-      }, args: [String(message.selector || '').slice(0, 1500),String(message.expectedName || '').slice(0,100),String(message.expectedRecordId || '').slice(0,120)] });
+      }, args: [String(currentSelector || '').slice(0, 1500),String(message.expectedName || '').slice(0,100),String(message.expectedRecordId || '').slice(0,120)] });
       } catch (e) {
         // A navigating script may disappear before tabs.url reflects its destination.
         for (let i = 0; i < 10 && !navigation; i++) {
@@ -132,13 +151,21 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       }
       finally { chrome.tabs.onUpdated.removeListener(observe); }
       const r = out?.[0]?.result; let after = await chrome.tabs.get(tabId);
-      const target = r?.url || (after.pendingUrl && after.pendingUrl !== before ? after.pendingUrl : after.url !== before ? after.url : navigation);
-      if (!r?.url && target && (after.url !== before || after.pendingUrl || navigation)) after = await waitURL(tabId, target);
+      if (!r?.url && !r?.navigated && after.url === before && !after.pendingUrl && !navigation) {
+        // Some SPA handlers route after the click script has returned.
+        const until = Date.now() + 2000;
+        while (Date.now() < until && after.url === before && !after.pendingUrl) { await new Promise(resolve => setTimeout(resolve, 100)); after = await chrome.tabs.get(tabId); }
+      }
+      const target = r?.url || (after.pendingUrl && after.pendingUrl !== before ? after.pendingUrl : after.url !== before ? after.url : navigation || (r?.navigated ? r.location : ''));
+      if (!r?.url && target) after = await waitURL(tabId, target);
       if (after.url !== before) {
         await JobScreenAccessBackground.permit(ownerId, tabId, access.ticket, before);
-        await chrome.tabs.goBack(tabId);
+        const prior = new URL(before), current = new URL(after.url); prior.hash = ''; current.hash = '';
+        // Back can skip script-created history entries, and replaceState adds none.
+        if (r?.navigated || prior.href === current.href) await chrome.tabs.update(tabId, { url: before });
+        else await chrome.tabs.goBack(tabId);
         await waitURL(tabId, before);
-        const restored = await settled(tabId, binding.origin, message.rule || {}, null, false, access);
+        const restored = await settled(tabId, binding.origin, message.rule || {}, null, false, access, originalList);
         if (restored.kind !== 'list') throw Error('详情入口跳转后未恢复原列表，已停止；请回到原列表后继续。');
       }
       if (!target) return '';
@@ -152,7 +179,15 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     const cancelled = () => JobScreenChannel.readerToken(ownerId, tabId) !== readToken;
     if (cancelled()) throw Error('详情读取已结束');
     if (owned?.tabId) worker = await chrome.tabs.get(owned.tabId).catch(() => null);
-    if (worker) await chrome.tabs.update(worker.id, { url: url.href, active: false });
+    if (worker) {
+      const prior = worker.url ? new URL(worker.url) : null, destination = new URL(url.href);
+      if (prior) prior.hash = ''; destination.hash = '';
+      if (prior?.href === destination.href && worker.url !== url.href) {
+        // A fragment change can leave the previous job's DOM in a completed SPA tab.
+        await resetReader(worker.id);
+      }
+      if (!cancelled()) await chrome.tabs.update(worker.id, { url: url.href, active: false });
+    }
     else {
       worker = await chrome.tabs.create({ url: url.href, active: false });
       if (!await chrome.tabs.get(ownerId).catch(() => null)) { await chrome.tabs.remove(worker.id).catch(() => {}); throw Error('筛选台已关闭'); }

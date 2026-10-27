@@ -1,10 +1,10 @@
 # 岗位筛选助手
 
-独立的 Chrome / Edge 浏览器插件，版本 0.1.5。通用网页识别，不内置具体公司名称、招聘域名、招聘接口或专用采集入口。
+独立的 Chrome / Edge 浏览器插件，版本 0.1.6。通用网页识别，不内置具体公司名称、招聘域名、招聘接口或专用采集入口。
 
 ## 使用
 
-下载 [v0.1.5 安装包](https://github.com/keyingdm/job-screen-assistant/releases/tag/v0.1.5)，解压后加载扩展。本版包含未单独发布的0.1.4本地修复。首次公开版本为0.1.0；此前本地试制版本的收藏仍使用原扩展身份读取。
+下载 [v0.1.6 安装包](https://github.com/keyingdm/job-screen-assistant/releases/tag/v0.1.6)，解压后加载扩展。本版扩展通用表格、图标分页与单页应用详情识别。首次公开版本为0.1.0；此前本地试制版本的收藏仍使用原扩展身份读取。
 
 1. 解压安装包，在扩展管理页启用开发者模式，加载包含 manifest.json 的文件夹。源码安装选择 extension 文件夹。
 2. 打开招聘列表，先选好原网站的公司、城市和招聘类别，再点击工具栏插件图标。
@@ -28,7 +28,7 @@
 
 ## 通用采集
 
-识别常见岗位卡片、多层标题、结构化 JobPosting、详情标题、下一页和加载更多控件；公司链接和公司标题不另算岗位。没有分页时尝试向下滚动发现后续岗位。详情先读取 HTML，动态页面按来源分别使用非活动工作标签页加载；只读到学历摘要时继续等正文，不据此标为完整。详情标题不会覆盖列表中已有的岗位名称。当前岗位顶部摘要、表格、独立学历栏目与任职要求合并核对，保留学历“不限”“优先”“以上”等原文；列表已知学历在详情缺少该字段时保留并标注来源。顶部与正文学历不一致时提示待核对，不默认取较低要求。列表分页和滚动在原网页执行，以沿用已有条件。
+识别常见岗位卡片、多层标题、结构化 JobPosting，以及按可见列标题组织的 DIV 表格、原生表格和 ARIA 网格；支持固定列合并、无链接标题、图标 next 分页和数字输入页码。识别详情标题、下一页和加载更多控件；公司链接和公司标题不另算岗位。没有分页时尝试向下滚动发现后续岗位。详情先读取 HTML，动态页面按来源分别使用非活动工作标签页加载；只读到学历摘要时继续等正文，不据此标为完整。详情标题不会覆盖列表中已有的岗位名称。当前岗位顶部摘要、表格、独立学历栏目与任职要求合并核对，保留学历“不限”“优先”“以上”等原文；列表已知学历在详情缺少该字段时保留并标注来源。顶部与正文学历不一致时提示待核对，不默认取较低要求。列表分页和滚动在原网页执行，以沿用已有条件。
 
 保留跨站岗位详情链接。缺少详情站点权限时，保留已发现岗位并暂停，点击总台“授权详情站点并继续”后沿用本轮进度；小窗提供跳转授权入口。只申请实际遇到的详情站点，不默认授权所有网站。列表来源切换到另一网站仍停止原任务。
 
@@ -52,7 +52,7 @@
 
 ## 开发
 
-检查命令：npm test、npm run test:extension、npm run test:collection、npm run test:recognition、npm run test:multisite、npm run test:access、npm run test:details、npm run test:boundaries、npm run test:identity、npm run test:widget。
+检查命令：npm test、npm run test:extension、npm run test:collection、npm run test:recognition、npm run test:multisite、npm run test:access、npm run test:details、npm run test:boundaries、npm run test:identity、npm run test:widget、npm run test:compatibility、npm run test:spa。
 
 目录生成工具为 tools/build_major_catalog.py，需 pypdf。它从官方 PDF 提取事实名称、代码、专业类及门类，检查883个唯一代码、92个专业类、13个门类，并记录原PDF的SHA-256及来源。目录不是招聘企业的接收承诺，不调用在线模型，也不自动更新。
 

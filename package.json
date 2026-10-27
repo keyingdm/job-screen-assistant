@@ -1,10 +1,10 @@
 {
   "name": "job-screen-assistant",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "private": true,
   "description": "独立的校园招聘岗位收集与筛选浏览器插件",
   "scripts": {
-    "test": "node --test tests/jobs.test.cjs",
+    "test": "node --test tests/jobs.test.cjs tests/jobs-routes.test.cjs",
     "test:extension": "node tests/jobs.browser.cjs",
     "test:collection": "node tests/jobs-collection.browser.cjs",
     "test:recognition": "node tests/jobs-recognition.browser.cjs",
@@ -14,6 +14,8 @@
     "test:details": "node tests/jobs-details.browser.cjs",
     "test:identity": "node tests/jobs-identity.browser.cjs",
     "test:widget": "node tests/jobs-widget.browser.cjs",
+    "test:compatibility": "node tests/jobs-compatibility.browser.cjs",
+    "test:spa": "node tests/jobs-spa.browser.cjs",
     "package": "python tools/package_extension.py"
   },
   "devDependencies": { "playwright": "1.62.1" }

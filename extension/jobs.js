@@ -295,7 +295,7 @@
       const access = await rpc('access-begin', { resume, speed: task.speed }, task); task.ticket = access.ticket;
       if (task.startToken !== token) { await rpc('close-worker', {}, task).catch(() => {}); return; }
       const running = tasks.run(task, { read: () => rpc('scan', { rule: task.rule, expand: true }, task), next: () => rpc('advance', { rule: task.rule }, task),
-        resolveLink: (selector, raw) => rpc('resolve', { selector, expectedName: raw.name, expectedRecordId: raw.recordId, rule: task.rule }, task), readDetail: (url, signal) => readDetail(url, signal, task),
+        resolveLink: (selector, raw) => rpc('resolve', { selector, expectedIdentity: raw.id, expectedName: raw.name, expectedRecordId: raw.recordId, rule: task.rule }, task), readDetail: (url, signal) => readDetail(url, signal, task),
         delay: 0,
         cleanup: async () => { await rpc('close-worker', {}, task).catch(() => {}); await completeFavorites(task); } }, resume);
       if (selectedTask === task.id) status(task.message); await running;
