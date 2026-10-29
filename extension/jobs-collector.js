@@ -61,6 +61,7 @@
         if (!page) { d.advanceInFlight = true; page = await next(); }
       }
       page ||= await read(); d.advanceInFlight = false;
+      if (page.kind === 'directory') throw Error('当前是公司/单位目录，检测到 '+page.entries.length+' 个公司入口，尚未进入岗位列表。请先打开目标公司的岗位页，再开始检索；多家公司可分别在新标签页启动并在总台合并。公司入口不计作岗位。');
       if (d.pages && page.kind === 'detail') { d.scopeChanged = true; throw Error('原列表已变成详情页，已停止合并岗位；请回到原列表并重新开始。'); }
       if (page.scopeURL) {
         if (d.scopeURL && d.scopeURL !== page.scopeURL) { d.scopeChanged = true; throw Error('原网页筛选范围已变化，已停止合并新旧岗位。请重新开始并清空进度。'); }

@@ -133,6 +133,8 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       try { out = await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: async (css, expected, expectedID) => {
         const el = document.querySelector(css);
         if (!el || /^(?:立即)?(?:申请|投递|登录|注册|提交)(?:岗位|职位|简历)?[\s↗]*$/.test(el.textContent.trim())) return '';
+        const anchor = el.closest('a[href]');
+        if (anchor) { const u = new URL(anchor.getAttribute('href'),location.href), paths = [u.pathname]; if (/^#(?:\/|!\/)/.test(u.hash)) paths.push(new URL(u.origin+u.hash.replace(/^#!/,'#').slice(1)).pathname); if (paths.some(path=>/(?:^|[/_-])(?:apply(?:job)?|application|login|signin|register|signup|submit)(?:$|[/_.-])/i.test(path))) return ''; }
         if (expected && !el.textContent.trim().includes(expected)) throw Error('岗位标题已变化，未点击不匹配的入口。');
         if (expectedID && ![el.id,...['job','post','position','vacancy','requisition'].map(k=>el.getAttribute('data-'+k+'-id'))].includes(expectedID)) throw Error('岗位编号已变化，未点击不匹配的入口。');
         const original = window.open, before = location.href; let captured = '';

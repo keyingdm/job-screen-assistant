@@ -1,10 +1,10 @@
 # 岗位筛选助手
 
-独立的 Chrome / Edge 浏览器插件，版本 0.1.6。通用网页识别，不内置具体公司名称、招聘域名、招聘接口或专用采集入口。
+独立的 Chrome / Edge 浏览器插件，版本 0.1.7。通用网页识别，不内置具体公司名称、招聘域名、招聘接口或专用采集入口。
 
 ## 使用
 
-下载 [v0.1.6 安装包](https://github.com/keyingdm/job-screen-assistant/releases/tag/v0.1.6)，解压后加载扩展。本版扩展通用表格、图标分页与单页应用详情识别。首次公开版本为0.1.0；此前本地试制版本的收藏仍使用原扩展身份读取。
+下载 [v0.1.7 安装包](https://github.com/keyingdm/job-screen-assistant/releases/tag/v0.1.7)，解压后加载扩展。本版补充图片详情入口、纯DIV分页与公司目录识别。首次公开版本为0.1.0；此前本地试制版本的收藏仍使用原扩展身份读取。
 
 1. 解压安装包，在扩展管理页启用开发者模式，加载包含 manifest.json 的文件夹。源码安装选择 extension 文件夹。
 2. 打开招聘列表，先选好原网站的公司、城市和招聘类别，再点击工具栏插件图标。
@@ -52,7 +52,7 @@
 
 ## 开发
 
-检查命令：npm test、npm run test:extension、npm run test:collection、npm run test:recognition、npm run test:multisite、npm run test:access、npm run test:details、npm run test:boundaries、npm run test:identity、npm run test:widget、npm run test:compatibility、npm run test:spa。
+检查命令：npm test、npm run test:extension、npm run test:collection、npm run test:recognition、npm run test:multisite、npm run test:access、npm run test:details、npm run test:boundaries、npm run test:identity、npm run test:widget、npm run test:compatibility、npm run test:spa、npm run test:image-links。
 
 目录生成工具为 tools/build_major_catalog.py，需 pypdf。它从官方 PDF 提取事实名称、代码、专业类及门类，检查883个唯一代码、92个专业类、13个门类，并记录原PDF的SHA-256及来源。目录不是招聘企业的接收承诺，不调用在线模型，也不自动更新。
 

@@ -62,6 +62,23 @@ async function until(check,timeout=20000){const end=Date.now()+timeout;while(Dat
  assert.equal(await resolveEntry(originalSecond),base+'/app?mode=dynamic-wrapper#/detail/2');assert.equal(source.url(),dynamicURL);
  const finalList=await hub.evaluate(()=>spaRPC('scan',{rule:{}}));assert.equal(finalList.scopeURL,dynamicList.scopeURL);assert.equal(finalList.signature,dynamicList.signature);
  pass('a stale second-job selector is relocated by its expected identity after SPA restoration recreates wrapper IDs');
+ await source.evaluate(() => {
+  globalThis.fixtureUnsafeClicks = 0;
+  const wrapper = document.createElement('div'); wrapper.id = 'fictional-unsafe-controls';
+  wrapper.innerHTML = '<a id="fictional-apply-anchor" href="/apply.html?jobId=fictional-unsafe"><span id="fictional-apply-child">虚构操作入口</span></a>' +
+   '<a id="fictional-login-anchor" href="/portal#/login?jobId=fictional-unsafe"><span id="fictional-login-child">虚构操作入口</span></a>';
+  for (const anchor of wrapper.querySelectorAll('a')) anchor.addEventListener('click', event => { event.preventDefault(); fixtureUnsafeClicks++; });
+  document.body.append(wrapper);
+ });
+ try {
+  for (const selector of ['#fictional-apply-anchor', '#fictional-apply-child', '#fictional-login-anchor', '#fictional-login-child']) {
+   const result = await hub.evaluate(css => spaRPC('resolve', { selector: css, expectedName: '虚构操作入口', rule: {} }), selector);
+   assert.equal(result, ''); assert.equal(source.url(), dynamicURL);
+   assert.equal(await source.evaluate(() => fixtureUnsafeClicks), 0);
+  }
+  assert.equal(traffic.filter(url => ['/apply.html', '/portal'].includes(url)).length, 0);
+ } finally { await source.evaluate(() => document.getElementById('fictional-unsafe-controls')?.remove()); }
+ pass('direct resolve rejects application and hash-login anchors plus their child spans without firing a click');
  const guarded=await hub.evaluate(url=>spaRPC('load',{url}),base+'/guard#/detail/1');assert.equal(guarded.name,'虚构单页岗位1');
  await assert.rejects(hub.evaluate(url=>spaRPC('load',{url}),base+'/guard#/detail/2'),/429/);assert.equal(traffic.filter(p=>p==='/guard').length,2);
  const block=await worker.evaluate(async origin=>(await chrome.storage.session.get('jobAccessBlock:'+origin))['jobAccessBlock:'+origin],base);assert.ok(block.until>Date.now());
