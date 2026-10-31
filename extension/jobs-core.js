@@ -11,7 +11,8 @@
   const matchMajor = Majors.match;
   function degreeInfo(value) {
     const parts = clauses(value).flatMap(v => v.split(/[，,]/)).filter(v => /专科|大专|高职|本科|学士|硕士|博士|研究生/.test(v))
-      .filter(v => !(/英语|CET|[四六]级/i.test(v) && !/学历|学位|及以上|或以上|不低于|至少|仅限|只招/.test(v)));
+      .filter(v => !(/英语|CET|[四六]级/i.test(v) && !/学历|学位|及以上|或以上|不低于|至少|仅限|只招/.test(v)))
+      .filter(v => !(/\d{1,2}\s*(?:周岁|岁)/.test(v) && !/学历|学位|及以上|或以上|不低于|至少|仅限|只招|必须为/.test(v)));
     const hard = parts.filter(v => !preferred(v) && !/在读|毕业时间/.test(v));
     const evidence = hard.join('；');
     if (!hard.length) return { label: /学历不限|不限学历/.test(value) ? '学历不限' : '未明确', rank: 0, evidence: parts.join('；'), unrestricted: /学历不限|不限学历/.test(value) };

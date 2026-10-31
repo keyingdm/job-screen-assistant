@@ -20,23 +20,33 @@ chrome.tabs.onRemoved.addListener(async tabId => {
 });
 async function inspect(tabId, rule, expand = false, detailOnly = false, access = null) {
   if (access) JobScreenAccessBackground.current(access.owner, access.source, access.ticket);
-  await chrome.scripting.executeScript({ target: { tabId }, files: ['jobs-access.js', 'jobs-page.js'] });
-  const out = await chrome.scripting.executeScript({ target: { tabId }, func: (r, ex, detail, ctx) => JobScreenPage.scan(r, ex, detail, ctx ? async () => {
+  await chrome.scripting.executeScript({ target: { tabId }, injectImmediately: true, files: ['jobs-access.js', 'jobs-page.js'] });
+  const out = await chrome.scripting.executeScript({ target: { tabId }, injectImmediately: true, func: (r, ex, detail, ctx) => JobScreenPage.scan(r, ex, detail, ctx ? async () => {
     const reply = await chrome.runtime.sendMessage({ type: 'job-access-step', ticket: ctx.ticket });
     if (!reply?.ok) throw reply?.accessStop ? JobScreenAccess.error(reply.accessStop) : Error(reply?.error || '读取授权已结束');
   } : null), args: [rule || {}, expand, detailOnly, access] });
   return out[0]?.result;
 }
 async function settled(tabId, origin, rule, previous, detailOnly = false, access = null, expected = null) {
-  const until = Date.now() + 16000; let partial;
+  const until = Date.now() + 16000; let partial, snapshot = '';
   while (Date.now() < until) {
     const tab = await chrome.tabs.get(tabId);
     if (tab.url && !tab.url.startsWith('about:') && new URL(tab.url).origin !== origin) throw JobScreenAccess.error(JobScreenAccess.record('cancelled', '页面跳转到其他网站，已停止；请在新页面重新打开插件。'));
-    if (tab.status === 'complete') try {
+    // Images or unrelated scripts can keep a committed document loading. Read
+    // its rendered DOM without accepting an uncommitted URL or an empty shell.
+    if (/^https?:/.test(tab.url || '') && !tab.pendingUrl) { try {
       const r = await inspect(tabId, rule, !expected, detailOnly, access);
       const matches = !expected || (r?.kind === expected.kind && r.scopeURL === expected.scopeURL && r.signature === expected.signature);
-      if (matches && r?.jobs.length && (!previous || r.signature !== previous)) { if (detailOnly && ['detail-summary','detail-missing'].includes(r.jobs[0]?.completeness)) partial = r; else return r; }
-    } catch (e) { if (JobScreenAccess.read(e)) throw e; }
+      const eligible = matches && r?.jobs.length && !r.loading && r.kind !== 'loading' && (!previous || r.signature !== previous) && (!detailOnly || r.kind === 'detail' && r.jobs.every(job => job.name));
+      if (eligible) {
+        const key = JSON.stringify([r.kind, r.scopeURL, r.signature, r.jobs.map(job => [job.name,job.company,job.city,job.requirements,job.majorRequirements,job.description,job.completeness])]);
+        if (key === snapshot) {
+          if (detailOnly && ['detail-summary','detail-missing'].includes(r.jobs[0]?.completeness)) partial = r;
+          else return r;
+        } else { snapshot = key; partial = null; }
+      } else { snapshot = ''; partial = null; }
+    } catch (e) { if (JobScreenAccess.read(e)) throw e; snapshot = ''; partial = null; }
+    } else { snapshot = ''; partial = null; }
     await new Promise(resolve => setTimeout(resolve, 400));
   }
   if (partial) {
@@ -127,21 +137,41 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       if (message.expectedIdentity && candidates.length !== 1) throw Error('原列表中的岗位身份已变化，请核对后继续。');
       // SPA restoration can recreate IDs and wrappers while retaining the same jobs.
       const currentSelector = candidates.length === 1 && candidates[0].titleSelector || message.selector;
-      const before = originalList.url; let navigation = '', out;
-      const observe = (id, change) => { if (id === tabId && change.url && change.url !== before) navigation = change.url; };
+      const before = originalList.url; let navigation = '', popupTarget = '', out;
+      const marker = '__jobScreenResolve_' + crypto.randomUUID().replace(/-/g, ''), token = crypto.randomUUID();
+      const possiblePopups = new Map(), popups = new Map();
+      const created = child => {
+        // Chromium can attribute an injected window.open to the active tab.
+        // New tabs are only candidates; their DOM opener must prove ownership.
+        possiblePopups.set(child.id, child.pendingUrl || child.url || '');
+      };
+      const observe = (id, change) => {
+        if (id === tabId && change.url && change.url !== before) navigation = change.url;
+        if (possiblePopups.has(id) && change.url) possiblePopups.set(id, change.url);
+        if (popups.has(id) && change.url) popups.set(id, change.url);
+      };
+      chrome.tabs.onCreated.addListener(created);
       chrome.tabs.onUpdated.addListener(observe);
-      try { out = await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: async (css, expected, expectedID) => {
+      try { out = await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: async (css, expected, expectedID, marker, token) => {
         const el = document.querySelector(css);
-        if (!el || /^(?:立即)?(?:申请|投递|登录|注册|提交)(?:岗位|职位|简历)?[\s↗]*$/.test(el.textContent.trim())) return '';
+        if (!el || /^(?:立即)?(?:申请|投递|登录|注册|提交)(?:岗位|职位|简历)?[↗]*$/.test(el.textContent.replace(/\s/g,''))) return '';
         const anchor = el.closest('a[href]');
         if (anchor) { const u = new URL(anchor.getAttribute('href'),location.href), paths = [u.pathname]; if (/^#(?:\/|!\/)/.test(u.hash)) paths.push(new URL(u.origin+u.hash.replace(/^#!/,'#').slice(1)).pathname); if (paths.some(path=>/(?:^|[/_-])(?:apply(?:job)?|application|login|signin|register|signup|submit)(?:$|[/_.-])/i.test(path))) return ''; }
         if (expected && !el.textContent.trim().includes(expected)) throw Error('岗位标题已变化，未点击不匹配的入口。');
         if (expectedID && ![el.id,...['job','post','position','vacancy','requisition'].map(k=>el.getAttribute('data-'+k+'-id'))].includes(expectedID)) throw Error('岗位编号已变化，未点击不匹配的入口。');
+        Object.defineProperty(window, marker, {value:token, configurable:true});
+        setTimeout(() => { if (window[marker] === token) delete window[marker]; }, 8000);
         const original = window.open, before = location.href; let captured = '';
-        window.open = url => { try { captured = new URL(url, location.href).href; } catch {} return {focus(){},closed:false}; };
+        window.open = (...args) => {
+          const target = args[0];
+          // Blank-window workflows need their real WindowProxy for later navigation.
+          if (target == null || !String(target).trim() || /^about:blank(?:[?#]|$)/i.test(String(target))) return original.apply(window, args);
+          try { const url = new URL(target, location.href); if (/^https?:$/.test(url.protocol)) captured = url.href; } catch {}
+          return {focus(){},closed:false};
+        };
         try { el.click(); if (!captured) await new Promise(resolve => setTimeout(resolve, 1000)); } finally { window.open = original; }
         return { url: captured, navigated: location.href !== before, location: location.href };
-      }, args: [String(currentSelector || '').slice(0, 1500),String(message.expectedName || '').slice(0,100),String(message.expectedRecordId || '').slice(0,120)] });
+      }, args: [String(currentSelector || '').slice(0, 1500),String(message.expectedName || '').slice(0,100),String(message.expectedRecordId || '').slice(0,120),marker,token] });
       } catch (e) {
         // A navigating script may disappear before tabs.url reflects its destination.
         for (let i = 0; i < 10 && !navigation; i++) {
@@ -149,17 +179,51 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
           navigation = current.pendingUrl && current.pendingUrl !== before ? current.pendingUrl : current.url !== before ? current.url : '';
           if (!navigation) await new Promise(resolve => setTimeout(resolve, 100));
         }
-        if (!navigation) throw e;
+        if (!navigation && !possiblePopups.size) throw e;
       }
-      finally { chrome.tabs.onUpdated.removeListener(observe); }
+      finally {
+        try {
+          // A cached open bypasses the temporary wrapper. Verify the DOM opener
+          // rather than accepting all new tabs attributed to the hub.
+          const until = Date.now() + 3000;
+          while (possiblePopups.size && Date.now() < until) {
+            for (const id of possiblePopups.keys()) {
+              const child = await chrome.tabs.get(id).catch(() => null);
+              const url = child?.pendingUrl || child?.url;
+              if (!child) { possiblePopups.delete(id); continue; }
+              if (url && /^https?:/.test(url)) possiblePopups.set(id, url);
+              if (!popups.has(id)) {
+                const proof = await chrome.scripting.executeScript({target:{tabId:id},world:'MAIN',func:(key,value)=>{
+                  try { return Boolean(window.opener && window.opener[key] === value); } catch { return false; }
+                },args:[marker,token]}).catch(() => null);
+                if (proof?.[0]?.result === true) {
+                  popups.set(id, possiblePopups.get(id));
+                  await JobScreenAccessBackground.attach(ownerId, tabId, access.ticket, id, binding.origin);
+                }
+              } else if (url && /^https?:/.test(url)) popups.set(id, url);
+            }
+            if (popups.size && [...popups.values()].every(url => /^https?:/.test(url))) break;
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+          const targets = [...new Set([...popups.values()].filter(url => /^https?:/.test(url)))];
+          if (targets.length > 1) throw Error('本次标题点击打开了多个不同页面，未自动选择；请在原站核对岗位入口。');
+          popupTarget = targets[0] || '';
+        } finally {
+          chrome.tabs.onUpdated.removeListener(observe); chrome.tabs.onCreated.removeListener(created);
+          await Promise.all([...popups.keys()].map(id => chrome.tabs.remove(id).catch(() => {})));
+          await chrome.scripting.executeScript({target:{tabId},world:'MAIN',func:(key,value)=>{
+            if (window[key] === value) delete window[key];
+          },args:[marker,token]}).catch(() => {});
+        }
+      }
       const r = out?.[0]?.result; let after = await chrome.tabs.get(tabId);
-      if (!r?.url && !r?.navigated && after.url === before && !after.pendingUrl && !navigation) {
+      if (!r?.url && !popupTarget && !r?.navigated && after.url === before && !after.pendingUrl && !navigation) {
         // Some SPA handlers route after the click script has returned.
         const until = Date.now() + 2000;
         while (Date.now() < until && after.url === before && !after.pendingUrl) { await new Promise(resolve => setTimeout(resolve, 100)); after = await chrome.tabs.get(tabId); }
       }
-      const target = r?.url || (after.pendingUrl && after.pendingUrl !== before ? after.pendingUrl : after.url !== before ? after.url : navigation || (r?.navigated ? r.location : ''));
-      if (!r?.url && target) after = await waitURL(tabId, target);
+      const target = r?.url || popupTarget || (after.pendingUrl && after.pendingUrl !== before ? after.pendingUrl : after.url !== before ? after.url : navigation || (r?.navigated ? r.location : ''));
+      if (!r?.url && !popupTarget && target) after = await waitURL(tabId, target);
       if (after.url !== before) {
         await JobScreenAccessBackground.permit(ownerId, tabId, access.ticket, before);
         const prior = new URL(before), current = new URL(after.url); prior.hash = ''; current.hash = '';
@@ -171,7 +235,10 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         if (restored.kind !== 'list') throw Error('详情入口跳转后未恢复原列表，已停止；请回到原列表后继续。');
       }
       if (!target) return '';
-      const resolved = new URL(target); return /^https?:$/.test(resolved.protocol) && !resolved.username && !resolved.password ? resolved.href : '';
+      JobScreenAccessBackground.current(ownerId, tabId, access.ticket);
+      const resolved = new URL(target), paths = [resolved.pathname];
+      if (/^#(?:\/|!\/)/.test(resolved.hash)) paths.push(new URL(resolved.origin + resolved.hash.replace(/^#!/,'#').slice(1)).pathname);
+      return /^https?:$/.test(resolved.protocol) && !resolved.username && !resolved.password && !paths.some(path=>/(?:^|[/_-])(?:apply(?:job)?|application|login|signin|register|signup|submit)(?:$|[/_.-])/i.test(path)) ? resolved.href : '';
     }
     const url = new URL(message.url);
     if (!/^https?:$/.test(url.protocol) || url.username || url.password) throw Error('详情链接无效');

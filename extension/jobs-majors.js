@@ -7,8 +7,10 @@
   const categoryNames = Object.values(catalog.categories);
   const LABEL = /^(?:专业要求|所学专业|专业背景|专业范围|招聘专业|专业类别|学科专业|专业|major(?:s)?|field of study)\s*[:：]\s*/i;
   const HEADING = /^(?:专业要求|所学专业|专业背景|专业范围|招聘专业|专业类别|学科专业|专业|major(?:s)?|field of study)\s*[:：]?\s*$/i;
+  const PREFERRED_LABEL = /^(?:优选专业|优先专业|专业优先|Preferred majors?)\s*[:：]\s*/i;
+  const PREFERRED_HEADING = /^(?:优选专业|优先专业|专业优先|Preferred majors?)\s*[:：]?\s*$/i;
   const SKILL = /^(?:熟悉|熟练|掌握|精通|了解|具备|具有|有|能够|能|负责|从事|参与|使用|会|擅长|获[得取]|持有|通过|技能要求|能力要求|familiar|proficient|experience|skills?\s*[:：])/i;
-  const OTHER = /^(?:学历|学位|毕业|工作地点|工作经验|岗位职责|工作职责|技能要求|能力要求|英语|年龄|性别|政治面貌|薪酬|福利|截止|招聘人数|任职要求|任职资格|备注)\s*[:：]/;
+  const OTHER = /^(?:学历(?:要求)?|学位(?:要求)?|毕业(?:时间|年份|届别)?|工作地点|工作经验|经验要求|工作年限|岗位职责|工作职责|主要职责|工作内容|职位描述|技能要求|能力要求|英语(?:要求)?|年龄(?:要求)?|性别|政治面貌|薪酬(?:待遇)?|福利(?:待遇)?|截止(?:时间|日期)?|招聘人数|任职要求|任职资格|备注|Responsibilities|Job description|Qualifications|Requirements|Skills?)\s*(?:[:：]|$)/i;
   const BROAD = /^(?:(?:相关|相近|其他|其它|理工科|理工|工科|工学|理学|文科|文史|经管|经济管理|不限|所有|各|本岗位).{0,8}(?:专业|学科|方向)?|相关专业)$/;
   const WIDE = /理工(?:科)?(?:类)?|工科(?:类)?|(?:理学|工学|经济学|管理学)(?:类)?(?:等)?(?:相关)?(?:专业|学科|背景)/;
   const join = entries => [...new Set(entries.map(e => e.text))].join('；');
@@ -23,28 +25,39 @@
     const job = typeof value === 'object' && value !== null ? value : { requirements: value };
     const entries = [], seen = new Set();
     function read(raw, field) {
-      let block = field;
+      let block = field, preferredLabel = '';
       for (const line of clean(raw).split(/[\n；;。]+/).map(s => s.replace(/^\s*\d+[、.．）)]\s*/, '').trim()).filter(Boolean)) {
-        if (HEADING.test(line)) { block = true; continue; }
-        if (OTHER.test(line)) block = false;
-        const labeled = LABEL.test(line), stripped = labeled ? line.replace(LABEL, '') : line;
+        let lineLabel = '';
         // Commas separate skills from major lists; a trailing “专业” also scopes a preceding bare list item.
-        const pieces = stripped.replace(/[（(]([^）)]*(?:除外|以外)[^）)]*)[）)]/g, '；$1；').split(/[，,；;]/).map(s => s.trim()).filter(Boolean);
+        const pieces = line.replace(/[（(]([^）)]*(?:除外|以外)[^）)]*)[）)]/g, '；$1；').split(/[，,；;]/).map(s => s.trim()).filter(Boolean);
         const listScope = pieces.some(s => /专业(?:毕业|背景|优先|$)|相关专业|学科/.test(s));
         for (const piece of pieces) {
-          const n = norm(piece);
-          if (!n || /^(?:不要求|无需|无须).+专业/.test(n) || (SKILL.test(piece) && !/^(?:具备|具有|拥有|有).+(?:专业背景|专业学历|专业学位|专业教育)/.test(piece)) || /专业(?:知识|技能|技术|能力|素养|软件)/.test(piece)) continue;
-          const professional = labeled || block || /专业(?:背景|毕业|方向)?|学科/.test(piece) || WIDE.test(piece) || bare(piece) || bare(piece.replace(/^(?:不接受|不招收?|不含|不包括|排除|除)/, '').replace(/(?:除外|以外|外)$/, '')) || (listScope && /^[\p{L}、/\s]{2,40}$/u.test(piece) && !/学历|经验|证书|工作|以上|应届/.test(piece));
+          if (PREFERRED_HEADING.test(piece)) { block = true; preferredLabel = piece; lineLabel = ''; continue; }
+          if (HEADING.test(piece)) { block = true; preferredLabel = ''; lineLabel = ''; continue; }
+          if (OTHER.test(piece)) { block = false; preferredLabel = ''; lineLabel = ''; }
+          const preferred = PREFERRED_LABEL.test(piece), labeled = preferred || LABEL.test(piece);
+          const part = labeled ? piece.replace(preferred ? PREFERRED_LABEL : LABEL, '') : piece;
+          if (labeled) {
+            lineLabel = piece.slice(0, piece.length - part.length);
+            preferredLabel = preferred ? lineLabel : '';
+            if (preferred) block = true;
+          }
+          const n = norm(part);
+          if (!n || /^(?:不要求|无需|无须).+专业/.test(n) || (SKILL.test(part) && !/^(?:具备|具有|拥有|有).+(?:专业背景|专业学历|专业学位|专业教育)/.test(part)) || /专业(?:知识|技能|技术|能力|素养|软件)/.test(part)) continue;
+          const professional = lineLabel || block || /专业(?:背景|毕业|方向)?|学科/.test(part) || WIDE.test(part) || bare(part) || bare(part.replace(/^(?:不接受|不招收?|不含|不包括|排除|除)/, '').replace(/(?:除外|以外|外)$/, '')) || (listScope && /^[\p{L}、/\s]{2,40}$/u.test(part) && !/学历|经验|证书|工作|以上|应届/.test(part));
           if (!professional) continue;
           const unrestricted = /专业不限|不限专业|专业不作限制|专业不做限制|不限$|^anymajor$/i.test(n);
           const excluded = /^(?:不接受|不招收?|不含|不包括|排除)|(?:除外|以外)|^除.+外|专业(?:不接受|不招)/.test(n);
-          const uncertain = /可放宽|可考虑|可以考虑|视情况|优秀者|也接受|也可|另有|原则上|非.{1,25}专业|不接受非|不招非/.test(n);
-          const kind = excluded ? 'excluded' : /优先|优选|为佳|加分/.test(n) ? 'preferred' : unrestricted ? 'unrestricted' : 'required';
-          const entry = { text: (labeled ? line.slice(0, line.length - stripped.length) : '') + piece, value: n, kind, source: labeled || field || block ? 'field' : 'clause', uncertain, broad: BROAD.test(n) || WIDE.test(n) };
-          const key = kind + ':' + n;
+          const preferenceContext = Boolean(preferredLabel);
+          const uncertain = excluded && preferenceContext || /可放宽|可考虑|可以考虑|视情况|优秀者|也接受|也可|另有|原则上|非.{1,25}专业|不接受非|不招非/.test(n);
+          const kind = excluded ? 'excluded' : preferredLabel || /优先|优选|为佳|加分/.test(n) ? 'preferred' : unrestricted ? 'unrestricted' : 'required';
+          // Preserve the visible preference heading with every inherited tag as evidence.
+          const prefix = lineLabel || (preferredLabel ? preferredLabel + '\n' : '');
+          const entry = { text: prefix + part, value: n, kind, source: lineLabel || field || block ? 'field' : 'clause', uncertain, broad: BROAD.test(n) || WIDE.test(n), preferenceContext };
+          const key = kind + ':' + n + ':' + preferenceContext;
           if (!seen.has(key)) { entries.push(entry); seen.add(key); }
         }
-        if (labeled) block = false;
+        if (lineLabel && !preferredLabel) block = false;
       }
     }
     // An explicit field is kept independently from requirements, including list-only metadata.
@@ -97,7 +110,9 @@
     const otherCatalog = /20(?!26)\d{2}.{0,16}目录|(?:研究生|高职|专科).{0,10}目录/.test(original);
     const relation = entry => !otherCatalog && person && profile.degree === '本科' && person.categoryName && includesName(entry, person.categoryName);
     const direct = entry => person && includesName(entry, person.name);
-    const negatives = scope.entries.filter(e => e.kind === 'excluded' && (direct(e) || relation(e)));
+    // Exclusions inside a preference list restrict that preference, not eligibility.
+    // Keep their evidence, while a separate explicit exclusion remains a hard rule.
+    const negatives = scope.entries.filter(e => e.kind === 'excluded' && !e.preferenceContext && (direct(e) || relation(e)));
     const positive = scope.entries.filter(e => ['required', 'preferred'].includes(e.kind));
     const exact = positive.filter(direct), categories = positive.filter(relation);
     const add = (state, reason, evidence, kind = state === 'fail' ? 'excluded' : state === 'pass' ? 'exact' : 'unknown') => ({ state, reason, evidence, kind, rank: { exact: 0, category: 1, broad: 2, unrestricted: 3, unknown: 4, different: 5, excluded: 6 }[kind] });

@@ -2,14 +2,15 @@
   'use strict';
   // DOM rules only: no company names, domains, endpoints or site adapters.
   const REQUIRE = /^(?:\d+[、.．）)]\s*)?\s*[【\[（(]?\s*(?:岗位任职条件|招聘任职条件|任职资格与要求|任职资格条件|任职资格要求|任职条件|任职要求|职位要求|岗位要求|任职资格|资格条件|招聘条件|招聘要求|应聘要求|应聘资格|应聘条件|人资资格|Qualifications|Requirements)\s*[】\]）)]?\s*[:：]?/i;
-  const DUTIES = /^\s*[【\[（(]?\s*(?:岗位职责|工作职责|工作内容|职位描述|Responsibilities|Job description)\s*[】\]）)]?\s*[:：]?/i;
+  const DUTIES = /^\s*[【\[（(]?\s*(?:岗位职责|工作职责|主要职责|工作内容|职位描述|Responsibilities|Job description)\s*[】\]）)]?\s*[:：]?/i;
   const BENEFITS = /^\s*[【\[（(]?\s*(?:福利待遇|薪酬待遇|待遇福利|Benefits)\s*[】\]）)]?\s*[:：]?/i;
+  const MAJOR_LABEL = '专业要求|所学专业|专业背景|专业范围|招聘专业|专业类别|学科专业|优选专业|优先专业|专业优先|专业|Preferred majors?|Majors?|Field of study';
   const BAD = /^(?:申请|立即申请|投递|立即投递|申请职位|登录|注册|收藏|首页|返回|查看详情|关闭详情|下一页|上一页|更多)$/;
   const NEXT = /^(?:下一页|下页|下一頁|Next|Next page|>|›|»|→|加载更多|更多岗位|Load more)$/i;
   const FIELD_TITLE = /^(?:招聘类型|招聘类别|学历要求|学历|工作地点|工作城市|工作地区|招聘公司|招聘单位|所属单位|所属公司|岗位类型|岗位类别|职位类型|职位类别|专业要求|专业类别|岗位分类|职位分类|专业标签|筛选条件|筛选|搜索|公司|城市|任职要求|任职资格|岗位职责|工作内容|职位描述|福利待遇|薪酬待遇|查看详情|查看职位详情|职位详情|详情|没有更多职位|没有更多了)[：:\s]*$/;
-  const TITLE_QUERY = 'h1,h2,h3,h4,a[href],[role=link],[class*="title" i],[class*="jobName" i],[class*="positionName" i],[class*="postName" i],[class*="posTitle" i],[class*="pos-title" i],[class*="post-title" i]';
+  const TITLE_QUERY = 'h1,h2,h3,h4,a[href],[role=link],[role=heading],[class*="title" i],[class*="jobName" i],[class*="job-name" i],[class*="position-name" i],[class*="post-name" i],[class*="positionName" i],[class*="postName" i],[class*="posTitle" i],[class*="pos-title" i],[class*="post-title" i]';
   const JOB_TITLE = /(?:job|position|vacancy|career|post|pos).*(?:title|name)|(?:title|name).*(?:job|position|vacancy|career|post|pos)/i;
-  const DETAIL_TITLE_QUERY = '[data-job-screen-title],[class*="jobTitle" i],[class*="job-title" i],[class*="position-title" i],[class*="post-title" i],[class*="positionTitle" i],[class*="jobName" i],[class*="positionName" i],[class*="postName" i],[class~="tit"],[class*="job-detail" i] [class~="name"],[class*="position-detail" i] [class~="name"]';
+  const DETAIL_TITLE_QUERY = '[data-job-screen-title],[class*="jobTitle" i],[class*="job-title" i],[class*="position-title" i],[class*="post-title" i],[class*="positionTitle" i],[class*="jobName" i],[class*="job-name" i],[class*="position-name" i],[class*="post-name" i],[class*="positionName" i],[class*="postName" i],[class~="tit"],[class*="job-detail" i] [class~="name"],[class*="position-detail" i] [class~="name"]';
   const EXCLUDED = 'header,footer,nav,aside,[role=search],[role=dialog],[class~="copyright" i],[class~="footer" i],[class*="recommend" i],[class*="similar-post" i],[class*="similarPost" i],[class*="similar-job" i],[class*="related-job" i]';
   const ORGANIZATION = /(?:有限公司|股份公司|集团|公司|研究院|研究所|实验室|大学|医院|工厂|中心)$/;
   const isOrganization = el => ORGANIZATION.test(text(el)) && !JOB_TITLE.test(el.className || '') && !/[-—·]/.test(text(el));
@@ -102,7 +103,7 @@
     const lines = value.split('\n'), out = []; let found = false;
     for (const line of lines) {
       if (!found && kind.test(line.trim())) { found = true; out.push(line.trim().replace(kind, '')); continue; }
-      if (found && (REQUIRE.test(line.trim()) || DUTIES.test(line.trim()) || BENEFITS.test(line.trim()) || /^(?:专业要求|所学专业|专业背景|申请|立即投递|相关推荐|发布时间|截止时间|关闭详情)/.test(line.trim()))) break;
+      if (found && (REQUIRE.test(line.trim()) || DUTIES.test(line.trim()) || BENEFITS.test(line.trim()) || new RegExp('^(?:'+MAJOR_LABEL+')\\s*(?:[:：]|$)','i').test(line.trim()) || /^(?:[\s↗☆★]*(?:立即申请|申请职位|立即投递|投递简历|申请|收藏|已收藏|分享|关闭详情))+[\s↗☆★]*$|^(?:相关推荐|发布时间|截止时间)(?:[:：\s]|$)/.test(line.trim()))) break;
       if (found) out.push(line);
     }
     return clean(out.join('\n'));
@@ -112,35 +113,48 @@
     return clean(m?.[1]);
   }
   function majorField(value, node) {
-    const label = /^(?:专业要求|所学专业|专业背景|专业范围|招聘专业|专业类别|学科专业|专业|Majors?|Field of study)\s*[:：]?\s*$/i;
+    const label = new RegExp('^(?:'+MAJOR_LABEL+')\\s*[:：]?\\s*$','i');
+    const keep = (heading, found) => /优选|优先|preferred/i.test(heading) ? clean(heading).replace(/[:：]+$/,'')+'：\n'+found : found;
     const paired = labelledControl(node,label); if (paired) return paired;
-    const inline = field(value, '专业要求|所学专业|专业背景|专业范围|招聘专业|专业类别|学科专业|专业|Majors?|Field of study');
-    if (inline) return inline;
+    const inline = value.match(new RegExp('(?:^|\\n)\\s*('+MAJOR_LABEL+')\\s*[:：]\\s*([^\\n]+)','i'));
+    if (inline) return keep(inline[1],clean(inline[2]));
     for (const row of node.querySelectorAll('tr')) {
       const cells = [...row.children];
-      for (let i = 0; i < cells.length - 1; i++) if (label.test(text(cells[i]))) return text(cells[i + 1]);
+      for (let i = 0; i < cells.length - 1; i++) if (label.test(text(cells[i]))) return keep(text(cells[i]),text(cells[i + 1]));
     }
-    for (const term of node.querySelectorAll('dt')) if (label.test(text(term)) && term.nextElementSibling?.matches('dd')) return text(term.nextElementSibling);
+    for (const term of node.querySelectorAll('h1,h2,h3,h4,dt,label,span,[role=heading]')) if (label.test(text(term))) {
+      let body = term.nextElementSibling;
+      while(body?.matches('button,[role=button],svg,[aria-hidden="true"]'))body=body.nextElementSibling;
+      body ||= plainHeading(term.parentElement)===text(term) ? term.parentElement.nextElementSibling : null;
+      if (!body || label.test(text(body)) || REQUIRE.test(text(body)) || DUTIES.test(text(body)) || BENEFITS.test(text(body))) continue;
+      const children = [...body.children];
+      const found = children.length>1 && children.every(el=>el.matches('span,a,li') && text(el).length<100) ? children.map(text).filter(Boolean).join('、') : text(body);
+      if (found) return keep(text(term),found);
+    }
     const lines = value.split('\n').map(v => v.trim()).filter(Boolean), index = lines.findIndex(v => label.test(v));
     if (index < 0) return '';
     const out = [];
-    for (const line of lines.slice(index + 1, index + 9)) {
+    for (const line of lines.slice(index + 1)) {
       if (/^(?:学历|学位|工作|岗位|任职|招聘|年龄|英语|技能|能力|职责|福利|薪酬|截止|备注|所属|人数|性别)|^.{2,12}[:：]/.test(line)) break;
       out.push(line);
     }
-    return clean(out.join('\n'));
+    return keep(lines[index],clean(out.join('\n')));
+  }
+  function plainHeading(node) {
+    if(!node)return '';
+    const clone=node.cloneNode(true);for(const el of clone.querySelectorAll('button,[role=button],svg,[aria-hidden="true"]'))el.remove();return text(clone);
   }
   function labelledControl(node, label) {
     for (const term of node.querySelectorAll('[class*="field-label" i],[class*="form-label" i]')) {
       if (!label.test(text(term))) continue;
       const value = [...(term.parentElement?.children || [])].find(el => el !== term && el.matches('[class*="field-content" i],[class*="field-control" i],[class*="form-control" i]'));
-      if (value) return text(value);
+      if (value) return /优选|优先|preferred/i.test(text(term)) ? text(term).replace(/[:：]+$/,'')+'：\n'+text(value) : text(value);
     }
     return '';
   }
   function pairedField(value, node, labels) {
     const inline = field(value, labels); if (inline) return inline;
-    const label = new RegExp('^(?:' + labels + ')\\s*[:：]?\\s*$', 'i');
+    const label = new RegExp('^[【\\[（(]?\\s*(?:' + labels + ')\\s*[】\\]）)]?\\s*[:：]?\\s*$', 'i');
     for (const row of node.querySelectorAll('tr')) {
       const cells = [...row.children];
       for (let i = 0; i < cells.length - 1; i++) if (label.test(text(cells[i]))) return text(cells[i + 1]);
@@ -179,7 +193,7 @@
       }
       return clone;
     };
-    const outside = detailTitle(area,true) ? [] : [...doc.querySelectorAll(DETAIL_TITLE_QUERY+',h1')]
+    const outside = detailTitle(area,true) ? [] : [...doc.querySelectorAll(DETAIL_TITLE_QUERY+',h1,h2,h3')]
       .filter(el => !area.contains(el) && !el.closest(EXCLUDED) && candidateName(el));
     let header;
     for (const title of outside) {
@@ -188,15 +202,33 @@
         if (value.length > 8000 || [...n.querySelectorAll('h1,[class*="jobTitle" i],[class*="positionTitle" i]')].filter(candidateName).length > 1) break;
         if (degreeField(value, n) || majorField(value, n) || company(value,n,candidateName(title))) { header = n; break; }
       }
+      if (!header && title.parentElement?.contains(area) && title.parentElement!==doc.body && text(title.parentElement).length<=30000) {
+        const siblings=[...title.parentElement.children], otherTitles=siblings.filter(el=>el!==title && el.matches(DETAIL_TITLE_QUERY+',h1') && candidateName(el));
+        if (!otherTitles.length) {
+          header=doc.createElement('div');header.append(cloneVisible(title));
+          for(let n=title.nextElementSibling;n && n!==area && !n.contains(area);n=n.nextElementSibling){
+            if(n.matches('form,'+EXCLUDED) || n.querySelector('input:not([type=hidden]),select,textarea'))continue;
+            const value=text(n);if(value.length<2000 && (degreeField(value,n)||city(value,n)||company(value,n,'')))header.append(cloneVisible(n));
+          }
+        }
+      }
       if (header) break;
     }
     if (header) scope.append(cloneVisible(header));
     scope.append(cloneVisible(area));
+    if (header || detailTitle(area,true)) {
+      const employers = [...doc.querySelectorAll('[class*="company" i][class*="name" i],[class*="employer" i][class*="name" i],[itemprop="hiringOrganization"]')].filter(el=>visible(el) && !el.closest(EXCLUDED) && text(el).length<120).filter(el=>{
+        let common=el.parentElement; while(common && !common.contains(area))common=common.parentElement;
+        return common && common!==doc.body && common!==doc.documentElement;
+      }).map(text).filter(Boolean);
+      const unique=[...new Set(employers)];
+      if (unique.length===1 && !company(text(scope),scope,'')) { const p=doc.createElement('p');p.textContent='招聘公司：'+unique[0];scope.prepend(p); }
+    }
     for (const el of scope.querySelectorAll(EXCLUDED + ',form,script,style,noscript,template,[hidden],[aria-hidden="true"]')) el.remove();
     for (const el of [...scope.querySelectorAll('*')]) if (/display\s*:\s*none|visibility\s*:\s*hidden/i.test(el.getAttribute('style') || '')) el.remove();
     // Recommendations may use a heading instead of a semantic container.
     for (const heading of [...scope.querySelectorAll('h1,h2,h3,h4,h5,h6,p,div')]) {
-      if (!/^(?:相关推荐|推荐岗位|推荐职位|相似职位|其他职位|其他岗位|热门职位|猜你喜欢)\s*[:：]?\s*$/.test(text(heading))) continue;
+      if (!/^(?:相关推荐|推荐岗位|推荐职位|相似职位|其他职位|其他岗位|热门职位|猜你喜欢|你可能感兴趣的|您可能感兴趣的|为你推荐|为您推荐)\s*[:：]?\s*$/.test(text(heading))) continue;
       let sibling = heading.nextSibling;
       while (sibling) { const next = sibling.nextSibling; sibling.remove(); sibling = next; }
       heading.remove();
@@ -207,11 +239,12 @@
     const headings = [...area.querySelectorAll('h1,h2,h3,h4,h5,h6,div,p,span')].filter(el => {
       if (el.closest(EXCLUDED)) return false;
       const s = text(el).trim();
-      return [REQUIRE,DUTIES,BENEFITS].some(re => re.test(s) && !s.replace(re,'').trim()) || /^(?:专业要求|所学专业|招聘专业)[:：]?$/.test(s);
+      return [REQUIRE,DUTIES,BENEFITS].some(re => re.test(s) && !s.replace(re,'').trim()) || new RegExp('^(?:'+MAJOR_LABEL+')[:：]?$','i').test(s);
     });
     if (!headings.length) return area;
     let scope = headings[0].parentElement;
     while (scope && !headings.every(el => scope.contains(el))) scope = scope.parentElement;
+    if (scope && plainHeading(scope)===text(headings[0]) && scope.parentElement && scope.parentElement!==area.ownerDocument.body) scope=scope.parentElement;
     return scope && text(scope).length <= 30000 ? scope : area;
   }
   function expiry(value) {
@@ -224,14 +257,14 @@
     const summary = value.split('\n').slice(0,boundary < 0 ? undefined : boundary).join('\n');
     const leaf = [...node.querySelectorAll('span,p,td,dd')].map(text).map(s => s.replace(/[|｜\s]+$/g,'').trim()).find(s => s !== name && s.length < 100 && ORGANIZATION.test(s) && summary.includes(s));
     return field(value, '招聘单位|公司名称|招聘公司|用人单位') || named || leaf ||
-      value.split('\n').find(s => s !== name && /(?:有限公司|股份公司|研究院|集团|公司|分公司|工厂|中心)$/.test(s.trim())) || [...node.querySelectorAll('h5,h4')].map(text).find(s => s && s !== name && s.length < 100) || '';
+      value.split('\n').find(s => s !== name && /(?:有限公司|股份公司|研究院|集团|公司|分公司|工厂|中心)$/.test(s.trim())) || [...node.querySelectorAll('h5,h4')].map(text).find(s => s && s !== name && s.length < 100 && ORGANIZATION.test(s)) || '';
   }
   function city(value, node) {
-    const named = node && [...node.querySelectorAll('[class*="work-place" i],[class*="workPlace" i],[class*="location" i],[class~="city" i],[class*="jobarea" i],[itemprop="jobLocation"]')].map(text).find(s => s && s.length < 80);
+    const named = node && [...node.querySelectorAll('[class*="work-place" i],[class*="workPlace" i],[class*="location" i],[class~="city" i],[class~="region" i],[class*="jobarea" i],[itemprop="jobLocation"]')].map(text).find(s => s && s.length < 80);
     const boundary = value.split('\n').findIndex(s => REQUIRE.test(s.trim()) || DUTIES.test(s.trim()) || BENEFITS.test(s.trim()) || /^(专业要求|所学专业)[:：]?$/.test(s.trim()));
     const summary = value.split('\n').slice(0,boundary < 0 ? undefined : boundary).join('\n');
     const leaf = node && [...node.querySelectorAll('span,p,td,dd')].filter(el=>![...el.children].some(child=>text(child))).map(text).find(s => /^[\u3400-\u9fff·-]{2,30}(?:市|区|县)$/.test(s) && summary.includes(s));
-    return field(value, '工作地点|工作城市|岗位地点|工作地区') || named?.replace(/[|｜\s]+$/g,'').trim() || leaf ||
+    return pairedField(value, node, '工作地点|工作城市|岗位地点|工作地区') || named?.replace(/[|｜\s]+$/g,'').trim() || leaf ||
       value.split('\n').find(s => /^[^｜|\n]{1,35}[｜|]\s*(全职|实习|兼职)/.test(s))?.split(/[｜|]/)[0] ||
       value.split('\n').find(s => /^(?:北京|上海|天津|重庆|内蒙古|宁夏|广西|新疆|西藏|香港|澳门|[^\s]{2,8}[省市])/.test(s) && s.length < 45) || '';
   }
@@ -247,12 +280,12 @@
   function facts(node, base, name, url, detailOnly = false) {
     const value = text(node), requirement = section(value, REQUIRE), clauses = detailOnly ? qualificationClauses(value) : '';
     const lines = value.split('\n'), boundary = lines.findIndex(line => REQUIRE.test(line.trim()) || DUTIES.test(line.trim()) || BENEFITS.test(line.trim()));
-    const identityText = lines.slice(0, boundary < 0 ? undefined : boundary).filter(line => !DETAIL_ACTION.test(line.trim()) && !/^(?:关闭详情|立即申请|申请|已申请|立即投递|投递|收藏|已收藏)$/.test(line.trim())).join('\n');
+    const identityText = lines.slice(0, boundary < 0 ? undefined : boundary).filter(line => !DETAIL_ACTION.test(line.trim()) && !/^(?:关闭详情|立即申请|申请|已申请|立即投递|投递|收藏|已收藏)$/.test(line.replace(/\s/g,'')) && !/^(?:申请人数|已申请人数|投递人数|浏览次数|浏览量)[:：\s]*\d+/.test(line.trim())).join('\n');
     let fingerprint = 2166136261;
     for (let i = 0; i < identityText.length; i++) fingerprint = Math.imul(fingerprint ^ identityText.charCodeAt(i), 16777619);
     const degree = degreeField(value, node);
     const major = majorField(value, node);
-    const summaries = [degree && '学历要求：' + degree, major && '专业要求：' + major];
+    const summaries = [degree && '学历要求：' + degree, major && (/^(?:优选专业|优先专业|专业优先|Preferred majors?)\s*[:：]/i.test(major) ? major : '专业要求：' + major)];
     for (const [label, labels] of [['经验要求','工作经验|经验要求|经验'], ['英语要求','英语要求|英语水平|外语要求|语言要求'], ['毕业届别','毕业届别|毕业年份|届别要求'], ['资格要求','资格要求|资格证书|证书要求'], ['年龄要求','年龄要求']]) {
       const found = pairedField(value, node, labels); if (found) summaries.push(label + '：' + found);
     }
@@ -262,7 +295,7 @@
     return { id, recordId: record, identityKind: record ? 'record' : url ? 'link' : 'text', url: url || base,
       name, company: company(value, node, name), city: city(value,node), group: field(value, '所属单位|上级单位|所属集团'),
       requirements: merged.filter(Boolean).join('\n'), majorRequirements: major, description: section(value, DUTIES), benefits: section(value, BENEFITS),
-      nature: field(value, '岗位性质|工作性质') || value.match(/(?:全职|实习|兼职|合同工)/)?.[0] || '',
+      nature: field(value, '岗位性质|工作性质') || identityText.match(/(?:^|[\n|｜\s])(全职|实习|兼职|合同工)(?=$|[\n|｜\s])/)?.[1] || '',
       closes: expiry(value), completeness: requirement || (detailOnly && (major || clauses)) ? 'detail' : detailOnly ? 'detail-summary' : 'list-summary', linkKind: url ? 'detail' : 'list',
       collectionState: requirement ? 'read' : 'pending' };
   }
@@ -288,7 +321,7 @@
   }
   function numberedPages(container) {
     if (!container) return null;
-    const current = [...container.querySelectorAll('[aria-current=page],.active,.is-active,.current')].find(el=>visible(el) && /^\d+$/.test(text(el)));
+    const current = [...container.querySelectorAll('[aria-current=page],.active,.is-active,.current,.now')].find(el=>visible(el) && /^\d+$/.test(text(el)));
     if (!current) return null;
     const siblings = [...current.parentElement.children].filter(visible), numbers = siblings.map(el=>/^\d+$/.test(text(el)) ? Number(text(el)) : 0);
     const complete = numbers.length > 0 && numbers.every((n,i)=>n === i+1);
@@ -300,6 +333,8 @@
   function pagerFor(el) {
     const semantic = el.closest('nav,[class*="pagination" i],[class*="paging" i],[class*="pager" i],[aria-label*="分页"],[aria-label*="Pagination"]');
     if (semantic) return semantic;
+    const plainPage = el.closest('.page');
+    if (plainPage && text(plainPage).length < 3000 && numberedPages(plainPage)) return plainPage;
     for (let n = el.parentElement, depth = 0; n && n.tagName !== 'BODY' && depth < 3; n = n.parentElement, depth++) {
       if (/(?:page|(?:^|[-_])nav(?:$|[-_]))/i.test(n.className || '') && numberedPages(n)) return n;
     }
@@ -308,11 +343,12 @@
   function nextControl(doc, rule = {}, includeDisabled = false) {
     const disabled = el => {
       const pages = numberedPages(pagerFor(el));
-      return el.disabled || el.getAttribute('aria-disabled') === 'true' || el.closest('.disable,.disabled,.is-disabled,[aria-disabled="true"],[class*="pagination-disabled"]') || pages?.pages && pages.current === pages.pages;
+      return el.disabled || el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true' || el.closest('.disable,.disabled,.is-disabled,[aria-disabled="true"],[class*="pagination-disabled"]') || pages?.pages && pages.current === pages.pages;
     };
     if (rule.next) { try { const e = doc.querySelector(rule.next); return e && visible(e) && !disabled(e) ? e : null; } catch {} }
     return [...doc.querySelectorAll('a,button,[role=button],[ng-click],[data-ng-click],[onclick],[class*="next" i],[title],[aria-label]')].find(el => {
       const label = clean(el.getAttribute('aria-label') || el.title || text(el));
+      if (/^(?:上一页|上页|上一頁|Previous(?: page)?|Prev|<|‹|«|←)$/i.test(label)) return false;
       if (/申请|投递|登录|注册|提交/.test([text(el),el.title,el.getAttribute('aria-label')].join(' '))) return false;
       const pagination = pagerFor(el);
       const action = el.getAttribute('ng-click') || el.getAttribute('data-ng-click') || el.getAttribute('onclick') || '';
@@ -363,7 +399,7 @@
       ['major', /^(?:专业要求|招聘专业|所学专业|专业|Major)$/i],
       ['experience', /^(?:工作年限|经验要求|工作经验|Experience)$/i]
     ];
-    const owners = new Set(), jobs = [], seen = new Set();
+    const owners = new Set(), headerOverrides = new Map(), jobs = [], seen = new Set();
     const ownerSelector = 'table,[role=table],[role=grid],[class*="list-grid" i],[class*="data-grid" i],[class*="table-grid" i]';
     const headerSelector = 'th,[role=columnheader],[class*="header-cell"]';
     const rowSelector = 'tr,[role=row],.table-row';
@@ -375,13 +411,45 @@
       }
       if (owner && area.contains(owner)) owners.add(owner);
     }
+    // Some accessible-by-label layouts use TD cells and separate adjacent
+    // header/data tables. Associate only matching columns in one local container.
+    for (const table of area.querySelectorAll('table')) {
+      if (!visible(table) || table.closest(EXCLUDED)) continue;
+      const rows = [...table.querySelectorAll('tr')].filter(row => row.closest('table') === table && visible(row));
+      const headerRow = rows[0], cells = headerRow && [...headerRow.children].filter(el => el.matches('td,th') && visible(el));
+      if (!cells?.length) continue;
+      const fields = cells.map(el => columns.find(([,pattern]) => pattern.test(text(el)))?.[0]);
+      const known = new Set(fields.filter(Boolean));
+      if (!known.has('name') || known.size < 2 || !known.has('company') && !known.has('city') && !known.has('degree') && !known.has('major')) continue;
+      if (cells.some(el => el.querySelector('a[href],input,select,[role=combobox]'))) continue;
+      let data = table;
+      if (rows.length === 1) {
+        const wrapper = table.parentElement?.children.length === 1 ? table.parentElement : table;
+        if (!wrapper?.parentElement || wrapper.parentElement === doc.body || wrapper.parentElement === doc.documentElement) continue;
+        const neighbor = wrapper.nextElementSibling;
+        if (!neighbor || neighbor.matches('form,' + EXCLUDED) || neighbor.querySelector('input,select,[role=combobox]')) continue;
+        const tables = neighbor.matches('table') ? [neighbor] : [...neighbor.querySelectorAll('table')];
+        if (tables.length !== 1) continue;
+        data = tables[0];
+        const dataRows = [...data.querySelectorAll('tr')].filter(row => row.closest('table') === data && visible(row));
+        if (!dataRows.length || dataRows.some(row => {
+          const values = [...row.children].filter(el => el.matches('td,th') && visible(el));
+          return values.length !== cells.length || values.some((value,index) => {
+            const headWidth = cells[index].getAttribute('width'), valueWidth = value.getAttribute('width');
+            return headWidth && valueWidth && headWidth !== valueWidth;
+          });
+        })) continue;
+      }
+      headerOverrides.set(data,cells); owners.add(data); handled.add(headerRow);
+    }
     for (const owner of owners) {
-      const headers = [...owner.querySelectorAll(headerSelector)].filter(visible);
+      const headers = headerOverrides.get(owner) || [...owner.querySelectorAll(headerSelector)].filter(visible);
       const key = el => ['col-key','data-field','aria-colindex','col-index'].map(k => el.getAttribute(k)).find(v => v !== null);
       const definitions = headers.map((el, index) => ({key:key(el),index,field:columns.find(([,re]) => re.test(text(el)))?.[0]})).filter(d => d.field);
       const rows = new Map();
       for (const row of owner.querySelectorAll(rowSelector)) {
         if (!visible(row) || row.closest(EXCLUDED) || row.closest(ownerSelector) && row.closest(ownerSelector) !== owner) continue;
+        if (headers.some(header => row.contains(header))) continue;
         const cells = [...row.querySelectorAll('td,[role=cell],[role=gridcell],.table-cell')].filter(el => visible(el) && el.closest(rowSelector) === row);
         if (!cells.length) continue;
         const index = ['row-index','data-row-index','aria-rowindex'].map(k => row.getAttribute(k)).find(v => v !== null);
@@ -419,9 +487,9 @@
   function candidateName(el) {
     let name = text(el);
     // Titles can contain category badges; retain the literal title without those labels.
-    if (JOB_TITLE.test(el.className || '') || el.classList.contains('tit')) {
+    if (JOB_TITLE.test(el.className || '') || el.classList.contains('tit') || el.matches('h1,h2,h3,h4,[role=heading]') && el.querySelector('[class*="salary" i]')) {
       const clone = el.cloneNode(true);
-      for (const badge of clone.querySelectorAll('[class*="label" i],[class*="badge" i],[class*="tag" i],[class*="cate" i]')) badge.remove();
+      for (const badge of clone.querySelectorAll('[class*="label" i],[class*="badge" i],[class*="tag" i],[class*="cate" i],[class*="salary" i],[class*="remuneration" i],[itemprop="baseSalary"]')) badge.remove();
       name = text(clone) || name;
       const children = [...clone.children], separator = children.findIndex(child => /^[/|｜]$/.test(text(child)));
       if (separator > 0) name = clean(children.slice(0,separator).map(text).join(' '));
@@ -429,8 +497,56 @@
     if (/(?:company|employer|organization|org).*(?:name|title)|(?:name|title).*(?:company|employer|organization)/i.test(el.className || '') && !JOB_TITLE.test(el.className || '')) return '';
     const heading = name.replace(/^\d+[、.．）)]\s*/, '').replace(/[：:\s]+$/, '');
     const sectionHeading = [REQUIRE, DUTIES, BENEFITS].some(pattern => pattern.test(heading) && heading.replace(pattern, '').trim() === '');
-    const generic = /^(?:校园招聘|社会招聘|人才招聘|招聘首页|职位列表|岗位列表)$/.test(heading) || /(?:公司|集团|研究院)[-—·\s]*(?:校招|校园招聘|招聘官网|招聘平台)$/.test(heading);
-    return visible(el) && name && name.length <= 100 && !BAD.test(name) && !FIELD_TITLE.test(name) && !sectionHeading && !generic && !/^(?:共\s*)?\d+\s*(?:个?(?:职位|岗位)|条|页)$/.test(name) ? name : '';
+    const generic = /^(?:校园招聘|社会招聘|人才招聘|招聘首页|职位列表|岗位列表|相关推荐|推荐岗位|推荐职位|你可能感兴趣的|您可能感兴趣的|为你推荐|为您推荐)$/.test(heading) || /(?:公司|集团|研究院)[-—·\s]*(?:校招|校园招聘|招聘官网|招聘平台)$/.test(heading);
+    return visible(el) && name && name.length <= 100 && !BAD.test(name.replace(/\s/g,'')) && !FIELD_TITLE.test(name) && !new RegExp('^(?:'+MAJOR_LABEL+')[：:\\s]*$','i').test(name) && !sectionHeading && !generic && !/^(?:共\s*)?\d+\s*(?:个?(?:职位|岗位)|条|页)$/.test(name) ? name : '';
+  }
+  function fieldCards(doc, area, base, handled) {
+    const label = /^(?:招聘单位|招聘公司|工作地点|工作城市|学历要求|专业要求|所学专业|招聘人数)[：:\s]*$/;
+    const cards = new Set(), jobs = [];
+    const signature = el=>el.tagName+' '+[...el.classList].filter(c=>!/^(?:active|selected|hover|open|expanded|show|is-.*)$/.test(c)).sort().join(' ');
+    for (const seed of area.querySelectorAll('span,p,label,dt,th,div')) {
+      if (!visible(seed) || seed.closest(EXCLUDED+',th,[role=columnheader]') || !label.test(text(seed))) continue;
+      for (let n=seed.parentElement,depth=0;n && n!==area && depth<8;n=n.parentElement,depth++) {
+        if (handled.has(n) || cards.has(n)) break;
+        const value=text(n); if(value.length>16000 || n.querySelector('input:not([type=hidden]),select,[role=combobox],th,[role=columnheader]')) break;
+        const fields = new Set([...n.querySelectorAll('span,p,label,dt,th,div')].map(text).filter(s=>label.test(s)).map(s=>s.replace(/[：:\s]/g,'')));
+        const evidence = fields.size>=2 && /招聘单位|招聘公司|招聘人数/.test(value) && /专业要求|所学专业|学历要求/.test(value);
+        const repeated=n.parentElement && [...n.parentElement.children].filter(s=>visible(s) && signature(s)===signature(n)).length>1;
+        if (evidence && repeated) { cards.add(n);break; }
+      }
+    }
+    for (const card of cards) {
+      if (card.closest(EXCLUDED)) continue;
+      const leaves=[...card.querySelectorAll('h1,h2,h3,h4,[role=heading],a,span,strong,b,p,div')].filter(el=>![...el.children].some(child=>text(child)) && !el.closest('button,[role=button],input,select,[class*="badge" i],[class*="tag" i],[class*="label" i]') && !el.closest(EXCLUDED));
+      const title=leaves.find(el=>{
+        const s=candidateName(el);
+        return s && !label.test(s) && !isOrganization(el) && !/[:：|｜]|\d{4}[-/.年]|^\d+\s*(?:人|次|条|个)$|^(?:本科|硕士|博士|研究生|大专|专科)(?:及以上|以上)?$/.test(s) && !/^[\u3400-\u9fff·-]{2,30}(?:市|区|县)$/.test(s);
+      });
+      if (!title) continue;
+      const name=candidateName(title),url=cardDetailURL(card,base),job=facts(card,base,name,url);
+      if (!url && doc.defaultView)job.titleSelector=selector(title);
+      handled.add(card);jobs.push(job);
+    }
+    // Identical visible cards can still open different postings. Keep ambiguous
+    // candidates until their real navigation URLs provide a stable identity.
+    const counts = new Map(), occurrences = new Map();
+    for (const job of jobs) if (job.identityKind === 'text' && job.titleSelector) counts.set(job.id, (counts.get(job.id) || 0) + 1);
+    for (const job of jobs) if (counts.get(job.id) > 1) {
+      const identity = job.id, occurrence = (occurrences.get(identity) || 0) + 1;
+      occurrences.set(identity, occurrence); job.id += ':candidate:' + occurrence;
+    }
+    const page = currentPageNumber(doc);
+    if (page) for (const job of jobs) if (job.identityKind === 'text' && job.titleSelector) job.id += ':page:' + page;
+    return jobs;
+  }
+  function currentPageNumber(doc) {
+    const active = [...doc.querySelectorAll('[aria-current=page],.pagination .active,.pagination .is-active,.pager .active,.el-pager .is-active,[class*="pagination-item-active"],.page .now')].find(el => visible(el) && /^\d+$/.test(text(el)));
+    const input = [...doc.querySelectorAll('[class*="paging" i] input,[class*="pager" i] input,[class*="pagination" i] input')].find(el => visible(el) && el.type === 'number' && Number(el.value) > 0);
+    return Number(text(active)) || Number(input?.value) || null;
+  }
+  function loadingArea(area) {
+    const query='[aria-busy="true"],[role=progressbar],.ant-skeleton-active,.el-loading-mask';
+    return [...(area.matches(query)?[area]:[]),...area.querySelectorAll(query)].some(el=>visible(el) && !el.closest(EXCLUDED));
   }
   function detailTitle(area, strict = false) {
     const explicit = [...area.querySelectorAll(DETAIL_TITLE_QUERY)].filter(el => !el.closest(EXCLUDED) && candidateName(el));
@@ -463,12 +579,14 @@
     if (rule.area && !area) throw Error('之前指定的岗位区域已不存在，请清除本页规则后重新选择。');
     area ||= doc.querySelector('main,[role=main],article') || doc.body;
     if (!area) return { url: base, jobs: [], next: false, total: null };
+    if (!detailOnly && loadingArea(area)) return {url:base,scopeURL:listScope(base,doc),jobs:[],kind:'loading',loading:true,next:false,total:null,signature:''};
     const titleNodes = rule.title ? [...area.querySelectorAll(rule.title)] : [...area.querySelectorAll(TITLE_QUERY)];
     if (!detailOnly && rule.title && titleNodes.length && titleNodes.every(el=>ORGANIZATION.test(text(el)))) {
       const entries = companyDirectory(area,base);
       if (entries.length) return {url:base,scopeURL:listScope(base,doc),jobs:[],entries,kind:'directory',next:false,total:null};
     }
     const gridRows = new Set(), jobs = detailOnly ? [] : structured.length ? structured : gridJobs(doc,area,base,gridRows), seen = new Set(jobs.map(j=>j.id));
+    if (!detailOnly && !structured.length)for(const job of fieldCards(doc,area,base,gridRows)) if(!seen.has(job.id)){seen.add(job.id);jobs.push(job);}
     if (!detailOnly && !structured.length) for (const candidate of titleNodes) {
       if (candidate.closest(EXCLUDED)) continue;
       if ([...gridRows].some(row=>row.contains(candidate))) continue;
@@ -480,7 +598,7 @@
       const href = link.getAttribute('href'); let url = href && !/^\s*#\s*$/.test(href) ? safeURL(href, base) : '';
       if (url && actionURL(url)) url = '';
       if (href && !url && !/^\s*(?:javascript:|#\s*$)/i.test(href)) continue;
-      const titleLike = candidate.matches('h1,h2,h3,h4,[role=link]') || JOB_TITLE.test(candidate.className || '') || /title/i.test(candidate.className || '') || /title/i.test(el.parentElement?.className || '');
+      const titleLike = candidate.matches('h1,h2,h3,h4,[role=link],[role=heading]') || JOB_TITLE.test(candidate.className || '') || /title/i.test(candidate.className || '') || /title/i.test(el.parentElement?.className || '');
       const pathLike = url && /[?&](?:id|postId|jobId|positionId|vacancyId|requisitionId)=|\/(?:job|position|posDetail|post|detail|vacancy|career)[^/]*(?:\/|\.html)|\/\d{3,}(?:[/?#]|$)/i.test(url);
       if (!titleLike && !pathLike && !rule.title) continue;
       const card = cardFor(candidate, name, rule);
@@ -497,6 +615,7 @@
       jobs.push(job);
     }
     if (!jobs.length && !detailOnly) {
+      if (loadingArea(area))return {url:base,scopeURL:listScope(base,doc),jobs:[],kind:'loading',loading:true,next:false,total:null,signature:''};
       const entries = companyDirectory(area,base);
       if (entries.length) return {url:base,scopeURL:listScope(base,doc),jobs:[],entries,kind:'directory',next:false,total:null};
     }
@@ -504,7 +623,15 @@
       const detailArea = detailScope(doc, contentScope(rule.area ? area : doc.querySelector('main,[role=main],article') || area));
       const value = text(detailArea), req = section(value, REQUIRE);
       const bodyTitle = detailTitle(detailArea);
-      if (value.split('\n').some(line => REQUIRE.test(line.trim())) || (detailOnly && (degreeField(value, detailArea) || majorField(value, detailArea) || qualificationClauses(value) || (bodyTitle && section(value,DUTIES))))) {
+      const detailHeadings = [...detailArea.querySelectorAll(DETAIL_TITLE_QUERY + ',h1')].filter(el => candidateName(el) && !isOrganization(el));
+      const singleTitle = new Set(detailHeadings.map(candidateName)).size === 1;
+      const explicitTitle = detailHeadings.some(el => JOB_TITLE.test(el.className || '') || el.hasAttribute('data-job-screen-title'));
+      // A public detail may contain only a description and separate preferred-major tags.
+      // Require one identifiable posting title and no pagination before importing it directly.
+      const directDetail = !detailOnly && bodyTitle && singleTitle && !nextControl(doc, rule, true) && !currentPageNumber(doc) &&
+        (majorField(value, detailArea) || section(value, DUTIES)) &&
+        (explicitTitle || degreeField(value, detailArea) && section(value, DUTIES));
+      if (value.split('\n').some(line => REQUIRE.test(line.trim())) || directDetail || (detailOnly && (degreeField(value, detailArea) || majorField(value, detailArea) || qualificationClauses(value) || (bodyTitle && section(value,DUTIES))))) {
         const title = bodyTitle;
         const job = facts(detailArea, base, field(value, '招聘岗位|岗位名称|职位名称') || title, base, true);
         if (detailOnly && structured.length === 1) {
@@ -521,14 +648,12 @@
     const next = nextControl(doc, rule), pageText = text(doc.body);
     const totalMatch = pageText.match(/共(?:计)?[（(\s]*(\d+)[）)\s]*(?:条(?:记录)?|个?(?:职位|岗位))/) || pageText.match(/(?:招聘职位|招聘岗位|在招职位|在招岗位|职位总数|岗位总数|职位数量|岗位数量)\s*[:：]?\s*[（(]?\s*(\d+)\s*[）)]?\s*个?/) || pageText.match(/(?:^|\n)\s*(\d+)\s*个?(?:职位|岗位)\s*(?:\n|$)/);
     const pagesMatch = pageText.match(/共\s*(\d+)\s*页/);
-    const pageNode = doc.querySelector('[aria-current=page],.pagination .active,.pagination .is-active,.pager .active,.el-pager .is-active,[class*="pagination-item-active"]');
     const numbered = [...doc.querySelectorAll('[class*="next" i]')].filter(visible).map(el=>numberedPages(pagerFor(el))).find(Boolean);
-    const pageInput = [...doc.querySelectorAll('[class*="paging" i] input,[class*="pager" i] input,[class*="pagination" i] input')].find(el => visible(el) && el.type === 'number' && Number(el.value) > 0);
     const total = totalMatch ? Number(totalMatch[1]) : null;
     const scroll = Boolean(!next && !nextControl(doc,rule,true) && !rule.next && doc.defaultView && jobs.length && (total === null || jobs.length < total));
     return { url: base, scopeURL: listScope(base,doc), jobs, kind: jobs.length ? 'list' : 'unknown', next: Boolean(next) || scroll, nextKind: next ? 'control' : scroll ? 'scroll' : '',
       nextURL: next ? safeURL(next.getAttribute('href'), base) : '', total: totalMatch ? Number(totalMatch[1]) : null,
-      totalPages: pagesMatch ? Number(pagesMatch[1]) : numbered?.pages || null, pageNumber: Number(text(pageNode)) || Number(pageInput?.value) || numbered?.current || null,
+      totalPages: pagesMatch ? Number(pagesMatch[1]) : numbered?.pages || null, pageNumber: currentPageNumber(doc) || numbered?.current || null,
       signature: jobs.map(j => j.id).join('|') };
   }
   async function scan(rule = {}, expand = false, detailOnly = false, permit = null) {

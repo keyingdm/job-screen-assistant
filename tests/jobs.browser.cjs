@@ -2,6 +2,15 @@ const { chromium } = require('playwright');
 const assert = require('node:assert/strict'), path = require('node:path'), fs = require('node:fs'), os = require('node:os');
 const ROOT = path.resolve(__dirname, '..'), tempRoot = fs.realpathSync(os.tmpdir()), testDir = fs.mkdtempSync(path.join(tempRoot, 'job-ui-test-'));
 let context, passed = 0; const pass = s => { passed++; console.log('PASS ' + s); };
+// Await the storage condition in Node; an async waitForFunction predicate can stop on false.
+async function waitForStorage(page,predicate,label,timeoutMs=10000){
+  const deadline=Date.now()+timeoutMs;
+  while(Date.now()<deadline){
+    if(await page.evaluate(predicate))return;
+    await new Promise(resolve=>setTimeout(resolve,50));
+  }
+  assert.fail('Timed out waiting for '+label);
+}
 (async () => {
   const ext = path.join(ROOT, 'extension'), legacy = path.resolve(ROOT, '../网申助手/extension');
   const paths = fs.existsSync(path.join(legacy, 'manifest.json')) ? [ext, legacy] : [ext];
@@ -32,10 +41,10 @@ let context, passed = 0; const pass = s => { passed++; console.log('PASS ' + s);
   await page.getByRole('button',{name:'嵌入式软件工程师（虚构）',exact:true}).click();
   await page.locator('#detail-close').click(); pass('right detail drawer shows original evidence and closes with X or Escape');
   await page.getByRole('button',{name:'收藏 嵌入式软件工程师（虚构）',exact:true}).click();
-  await page.waitForFunction(async()=>Object.keys((await chrome.storage.local.get('jobFavorites')).jobFavorites||{}).length===1);
+  await waitForStorage(page,async()=>Object.keys((await chrome.storage.local.get('jobFavorites')).jobFavorites||{}).length===1,'the favorite snapshot');
   await page.getByRole('button',{name:'嵌入式软件工程师（虚构）',exact:true}).click();
   await page.getByLabel('投递标记 嵌入式软件工程师（虚构）',{exact:true}).selectOption('已投递');
-  await page.waitForFunction(async()=>Object.values((await chrome.storage.local.get('jobFavorites')).jobFavorites)[0].status==='已投递');
+  await waitForStorage(page,async()=>Object.values((await chrome.storage.local.get('jobFavorites')).jobFavorites||{})[0]?.status==='已投递','the manual application state');
   await page.locator('#detail-close').click();
   const saved = await page.evaluate(async()=>chrome.storage.local.get(null)); assert.equal(saved.jobDataset,undefined); assert.equal(saved.jobMarks,undefined);
   assert.equal(Object.values(saved.jobFavorites)[0].job.description.includes('嵌入式'),true);
@@ -51,7 +60,7 @@ let context, passed = 0; const pass = s => { passed++; console.log('PASS ' + s);
   assert.equal(backup.format,'job-screen-favorites'); assert.equal(backup.favorites.length,1); assert.equal(backup.dataset,undefined); assert.equal(backup.profile,undefined);
   pass('backup contains favorites only even while six ordinary results are visible');
   await page.locator('#tab-favorites').click(); await page.getByRole('button',{name:'取消收藏 嵌入式软件工程师（虚构）',exact:true}).click();
-  await page.waitForFunction(async()=>Object.keys((await chrome.storage.local.get('jobFavorites')).jobFavorites).length===0);
+  await waitForStorage(page,async()=>Object.keys((await chrome.storage.local.get('jobFavorites')).jobFavorites||{}).length===0,'favorite removal');
   await page.reload(); assert.equal(await page.locator('.job-row').count(),0); pass('removing a favorite also removes its persisted snapshot');
   const migration = await page.evaluate(async()=> {
     const jobs=JobScreenSamples.slice(0,2).map(raw=>JobScreen.normalize(raw,'sample'));
@@ -88,9 +97,9 @@ let context, passed = 0; const pass = s => { passed++; console.log('PASS ' + s);
   await page.locator('#my-major').fill('电气');assert.match(await page.locator('#major-profile-note').textContent(),/未识别/);
   pass('major keyword groups, strict mode and full-name qualification stay distinct in table, cards and drawer');
   await page.getByRole('button',{name:'收藏 虚构电气研发',exact:true}).click();
-  await page.waitForFunction(async()=>Object.values((await chrome.storage.local.get('jobFavorites')).jobFavorites).some(f=>f.job.majorRequirements==='电气工程及其自动化'));
+  await waitForStorage(page,async()=>Object.values((await chrome.storage.local.get('jobFavorites')).jobFavorites||{}).some(f=>f.job.majorRequirements==='电气工程及其自动化'),'the separate professional field');
   await page.getByRole('button',{name:'取消收藏 虚构电气研发',exact:true}).click();
-  await page.waitForFunction(async()=>!Object.values((await chrome.storage.local.get('jobFavorites')).jobFavorites).some(f=>f.job.id==='major1'));
+  await waitForStorage(page,async()=>!Object.values((await chrome.storage.local.get('jobFavorites')).jobFavorites||{}).some(f=>f.job.id==='major1'),'the professional favorite removal');
   pass('separate professional fields are retained in a favorite snapshot');
   await page.evaluate(()=>{const original=JobScreenStorage.set;globalThis.pendingProfileWrites=0;JobScreenStorage.set=async function(key,value){if(key==='jobProfile'){pendingProfileWrites++;try{await new Promise(r=>setTimeout(r,180));return await original.call(this,key,value);}finally{pendingProfileWrites--;}}return original.call(this,key,value);};});
   await page.locator('#my-major').fill('电子信息科学与技术');await page.locator('#my-degree').selectOption('硕士');await page.locator('#clear-profile').click();

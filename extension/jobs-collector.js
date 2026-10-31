@@ -12,6 +12,15 @@
     let lastPublish = 0;
     const publish = () => { d.jobs = [...map.values()]; d.identities = [...identities]; d.updatedAt = new Date().toISOString(); lastPublish = Date.now(); onUpdate(d); };
     let interrupted = false;
+    const readyPage = async value => {
+      const until=Date.now()+30000;
+      while(value?.kind==='loading' || value?.loading){
+        signal?.throwIfAborted();
+        if(Date.now()>=until)throw Error('岗位列表仍在加载，尚未核对岗位数量；本轮进度保留，可在原页加载完成后继续。');
+        d.phase='loading';publish();await sleep(350,signal);value=await read();
+      }
+      return value;
+    };
     const details = async () => {
       d.stage = 'details'; d.phase = 'details'; publish();
       for (const job of map.values()) {
@@ -55,12 +64,12 @@
         // A pause can occur after browser navigation but before its result arrives.
         // Re-read that page before deciding to advance again.
         if (d.advanceInFlight) {
-          const current = await read(), signature = current.signature || current.jobs.map(j => j.id).join('|');
+          const current = await readyPage(await read()), signature = current.signature || current.jobs.map(j => j.id).join('|');
           if (signature !== d.signatures.at(-1)) page = current;
         }
         if (!page) { d.advanceInFlight = true; page = await next(); }
       }
-      page ||= await read(); d.advanceInFlight = false;
+      page = await readyPage(page || await read()); d.advanceInFlight = false; d.phase='list';
       if (page.kind === 'directory') throw Error('当前是公司/单位目录，检测到 '+page.entries.length+' 个公司入口，尚未进入岗位列表。请先打开目标公司的岗位页，再开始检索；多家公司可分别在新标签页启动并在总台合并。公司入口不计作岗位。');
       if (d.pages && page.kind === 'detail') { d.scopeChanged = true; throw Error('原列表已变成详情页，已停止合并岗位；请回到原列表并重新开始。'); }
       if (page.scopeURL) {

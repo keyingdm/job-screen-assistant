@@ -2,6 +2,15 @@
 const {chromium}=require('playwright'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),http=require('node:http');
 const ROOT=path.resolve(__dirname,'..'),tempRoot=fs.realpathSync(os.tmpdir()),testRoot=fs.mkdtempSync(path.join(tempRoot,'job-generic-test-'));
 let context,server,passed=0;const pass=s=>{passed++;console.log('PASS '+s);};
+// waitForFunction treats an async predicate's Promise as truthy before its value is known.
+async function waitForStorage(page,predicate,label,timeoutMs=10000){
+  const deadline=Date.now()+timeoutMs;
+  while(Date.now()<deadline){
+    if(await page.evaluate(predicate))return;
+    await new Promise(resolve=>setTimeout(resolve,50));
+  }
+  assert.fail('Timed out waiting for '+label);
+}
 (async()=>{
   const ext=path.join(testRoot,'extension');fs.cpSync(path.join(ROOT,'extension'),ext,{recursive:true});
   require('./access-fixture.cjs')(ext);
@@ -43,7 +52,7 @@ let context,server,passed=0;const pass=s=>{passed++;console.log('PASS '+s);};
   await page.getByRole('button',{name:'虚构岗位4',exact:true}).click();assert.match(await page.locator('#detail-body').textContent(),/要求不完整/);await page.locator('#detail-close').click();
   assert.match(await page.locator('#coverage').textContent(),/要求完整 3.*不完整 1/);
   pass('static details, rendered details and missing requirements remain distinct');
-  await page.getByRole('button',{name:'收藏 虚构岗位1',exact:true}).click();await page.waitForFunction(async()=>Object.keys((await chrome.storage.local.get('jobFavorites')).jobFavorites||{}).length===1);
+  await page.getByRole('button',{name:'收藏 虚构岗位1',exact:true}).click();await waitForStorage(page,async()=>Object.keys((await chrome.storage.local.get('jobFavorites')).jobFavorites||{}).length===1,'the favorite snapshot');
   const saved=await page.evaluate(async()=>Object.values((await chrome.storage.local.get('jobFavorites')).jobFavorites)[0]);
   assert.equal(saved.job.url,base+'/job/detail?id=1');assert.match(saved.job.requirements,/2027/);
   const download=page.waitForEvent('download');await page.locator('#export-csv').click();assert.match(fs.readFileSync(await(await download).path(),'utf8'),/虚构岗位4/);

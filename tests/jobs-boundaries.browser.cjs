@@ -52,7 +52,7 @@ async function until(check,timeout=90000){const end=Date.now()+timeout;while(Dat
   let count=0;await until(async()=>{const out=await client.send('Runtime.callFunctionOn',{objectId:object.objectId,functionDeclaration:'function(){return this.querySelectorAll(".job-name").length;}',returnByValue:true});count=out.result.value;return count===700;});await client.detach();
   assert.equal(count,700);pass('the source widget receives all 700 filtered results without truncation');
   const favorites=await worker.evaluate(()=>chrome.storage.local.get('jobFavorites'));assert.equal(Object.keys(favorites.jobFavorites||{}).length,0);
-  await hub.locator('#end-task').click();assert.equal(await hub.locator('#session-count').textContent(),'0');
+  await hub.locator('#end-task').click();await until(async()=>await hub.locator('#session-count').textContent()==='0');assert.equal(await hub.locator('#session-count').textContent(),'0');
   pass('large ordinary results can be ended and cleared without being persisted as favorites');
   await source.goto(base+'/interrupted?page=1');await worker.evaluate(async id=>JobScreenChannel.showMini(await chrome.tabs.get(id)),tabId);
   await hub.locator('#collect').click();await hub.locator('#status').filter({hasText:'页面加载超时'}).waitFor();

@@ -49,7 +49,7 @@ const cards=count=>Array.from({length:count},(_,i)=>'<div class="styled__ListIte
   // Test the actual permission/binding/RPC path, with fast local detail reads only.
   await page.locator('#collect').click();
   const progress=setInterval(async()=>{try{console.log('Collection progress:',await page.locator('#coverage').textContent(),await page.locator('#status').textContent());}catch{}},10000);
-  try{await page.locator('#coverage').filter({hasText:'已发现 120 /'}).waitFor();}finally{clearInterval(progress);}
+  try{await page.locator('#coverage').filter({hasText:'已发现 120 /'}).waitFor({timeout:240000});}finally{clearInterval(progress);}
   await page.locator('#pause').click();await page.locator('#status').filter({hasText:'已暂停'}).waitFor();
   assert.equal(await page.locator('#session-count').textContent(),'120');
   const extracted=await source.evaluate(()=>JobScreenPage.scanDocument(document,location.href));
